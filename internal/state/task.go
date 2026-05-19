@@ -22,7 +22,7 @@ type Task struct {
 	ID         string
 	WorkflowID string
 	AgentID    string
-	DependsOn  []string
+	DependsOn  []string //slice of dependency Tasks IDs
 	Status     TaskStatus
 	Payload    map[string]any
 	Result     map[string]any
