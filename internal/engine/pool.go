@@ -73,7 +73,7 @@ func (wp *WorkerPool) Start(ctx context.Context) <-chan TaskResult {
 								resultChan <- newTaskResult(nil, state.FailedTaskStatus, msg, err)
 								continue
 							}
-							msg := logger.LogTaskTransition(task.ID, oldStatus, task.Status, nil, "context deadline")
+							msg := logger.LogTaskTransition(task.ID, oldStatus, state.CancelledTaskStatus, nil, "context deadline")
 							resultChan <- newTaskResult(task, state.CancelledTaskStatus, msg, nil)
 						}
 					})
@@ -89,7 +89,7 @@ func (wp *WorkerPool) Start(ctx context.Context) <-chan TaskResult {
 						msg := fmt.Sprintf("error transitioning state: %s", err)
 						resultChan <- newTaskResult(task, state.FailedTaskStatus, msg, err)
 					}
-					msg := logger.LogTaskTransition(task.ID, oldStatus, task.Status, &w.id, "")
+					msg := logger.LogTaskTransition(task.ID, oldStatus, state.RunningTaskStatus, &w.id, "")
 					resultChan <- newTaskResult(task, state.RunningTaskStatus, msg, nil)
 					resultChan <- w.run(ctx, task)
 				}

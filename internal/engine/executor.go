@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/justinndidit/agentflow/internal/state"
 )
@@ -29,11 +30,13 @@ func (e *Executor) Run(ctx context.Context, tasks []*state.Task) error {
 		return fmt.Errorf("error sorting order of execution of tasks: %s", err)
 	}
 
+	start := time.Now()
 	resultChan := e.pool.Start(ctx)
 
 	for n, wave := range waves {
-		completed := 0
+		fmt.Printf("\n[wave %d] starting — %d task(s)\n", n, len(wave))
 
+		completed := 0
 		//submit wave of task
 		for _, task := range wave {
 			if err := e.pool.Submit(ctx, task); err != nil {
@@ -57,6 +60,10 @@ func (e *Executor) Run(ctx context.Context, tasks []*state.Task) error {
 					return fmt.Errorf("result channel closed unexpectedly on wave %d", n)
 				}
 
+				if result.Message != "" {
+					fmt.Println(result.Message)
+				}
+
 				if result.Task != nil && isTerminal(result.Status) {
 					completed++
 				}
@@ -65,7 +72,9 @@ func (e *Executor) Run(ctx context.Context, tasks []*state.Task) error {
 				// }
 			}
 		}
+		fmt.Printf("[wave %d] complete\n", n)
 	}
+	fmt.Printf("\nworkflow completed in %s\n", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
