@@ -18,8 +18,8 @@ func TestWorkerRun_ContextCancelled(t *testing.T) {
 
 	res := w.run(ctx, task)
 
-	if !strings.Contains(res, "context timeout") {
-		t.Fatalf("expected context timeout in result, got: %s", res)
+	if !strings.Contains(res.Message, "context timeout") {
+		t.Fatalf("expected context timeout in result, got: %s", res.Message)
 	}
 
 	if task.Status != state.CancelledTaskStatus {

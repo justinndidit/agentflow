@@ -16,7 +16,7 @@ type WorkerPool struct {
 	wg          sync.WaitGroup
 }
 
-func New(workerCount, bufferSize int) *WorkerPool {
+func NewWorkerPool(workerCount, bufferSize int) *WorkerPool {
 	jobChan := make(chan *state.Task, bufferSize)
 	return &WorkerPool{
 		WorkerCount: workerCount,
@@ -25,7 +25,8 @@ func New(workerCount, bufferSize int) *WorkerPool {
 	}
 }
 
-func (wp *WorkerPool) Submit(t *state.Task) error {
+// public API to submit tasks for execution
+func (wp *WorkerPool) TrySubmit(t *state.Task) error {
 	//select ensures this never blocks
 	//tasks are either sent to the channel or defaults - no blocking
 	select {
@@ -36,8 +37,19 @@ func (wp *WorkerPool) Submit(t *state.Task) error {
 	}
 }
 
-func (wp *WorkerPool) Start(ctx context.Context) <-chan string {
-	resultChan := make(chan string)
+// Internal submission - blocking submission
+// Ensures all tasks in an execution wave gets submitted
+func (wp *WorkerPool) Submit(ctx context.Context, t *state.Task) error {
+	select {
+	case wp.jobChan <- t:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("context cancelled while submitting task %s", t.ID)
+	}
+}
+
+func (wp *WorkerPool) Start(ctx context.Context) <-chan TaskResult {
+	resultChan := make(chan TaskResult)
 	var once sync.Once
 
 	for n := range wp.WorkerCount {
@@ -52,29 +64,33 @@ func (wp *WorkerPool) Start(ctx context.Context) <-chan string {
 				case <-ctx.Done():
 					//drain job channel
 					once.Do(func() {
-						//drain logic
 						//close job channel first
 						close(wp.jobChan)
 						for task := range wp.jobChan {
 							oldStatus, err := task.Transition(state.CancelledTaskStatus)
 							if err != nil {
-								resultChan <- fmt.Sprintf("error transitioning state: %s", err)
+								msg := fmt.Sprintf("error transitioning state: %s", err)
+								resultChan <- newTaskResult(nil, state.FailedTaskStatus, msg, err)
 								continue
 							}
-							resultChan <- logger.LogTaskTransition(task.ID, oldStatus, task.Status, nil, "context deadline")
+							msg := logger.LogTaskTransition(task.ID, oldStatus, task.Status, nil, "context deadline")
+							resultChan <- newTaskResult(task, state.CancelledTaskStatus, msg, nil)
 						}
 					})
 					return
 				case task, ok := <-wp.jobChan:
 					if !ok {
-						resultChan <- "job channel closed"
+						msg := "job channel closed"
+						resultChan <- newTaskResult(task, state.CancelledTaskStatus, msg, nil)
 						return
 					}
 					oldStatus, err := task.Transition(state.RunningTaskStatus)
 					if err != nil {
-						resultChan <- fmt.Sprintf("error transitioning state: %s", err)
+						msg := fmt.Sprintf("error transitioning state: %s", err)
+						resultChan <- newTaskResult(task, state.FailedTaskStatus, msg, err)
 					}
-					resultChan <- logger.LogTaskTransition(task.ID, oldStatus, task.Status, &w.id, "")
+					msg := logger.LogTaskTransition(task.ID, oldStatus, task.Status, &w.id, "")
+					resultChan <- newTaskResult(task, state.RunningTaskStatus, msg, nil)
 					resultChan <- w.run(ctx, task)
 				}
 			}
