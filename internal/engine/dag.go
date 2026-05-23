@@ -49,7 +49,7 @@ func (g *Graph) TopologicalSort() ([][]*state.Task, error) {
 		}
 	}
 
-	for len(startNodes) > 0 {
+	for len(startNodes.Data) > 0 {
 		currentWave := startNodes.ToSlice()
 		startNodes.Clear()
 

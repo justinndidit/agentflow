@@ -32,7 +32,7 @@ func newTaskResult(t *state.Task, status state.TaskStatus, msg string, err error
 
 func (w *worker) run(ctx context.Context, t *state.Task) TaskResult {
 	select {
-	case <-time.After(time.Second):
+	case <-time.After(time.Second * 3):
 		oldStatus, err := t.Transition(state.CompletedTaskStatus)
 		if err != nil {
 			msg := fmt.Sprintf("invalid transition: %s", err)
