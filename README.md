@@ -45,13 +45,17 @@ immediately rather than blocking indefinitely.
 ---
 
 ## Architecture
+[Architecture Diagrams](docs/agentflow_architecture.md)
 
+application structure
 ```
 cmd/agentflow/
     main.go                 — entry point
 
 internal/
     engine/
+        dag.go              - Task Graph: Topological sorting of tasks
+        executor.go         - Executor: Initializes worker pool, runs waves of tasks
         pool.go             — WorkerPool: Submit, Start, drain on cancellation
         worker.go           — worker: run with context-aware cancellation
 
@@ -68,7 +72,9 @@ pkg/
 
 ---
 
-## What's Built (v0.1)
+## What's Built
+
+### (v0.1)
 
 - [x] Concurrent worker pool with bounded concurrency
 - [x] Context-aware cancellation — workers stop cleanly mid-execution
@@ -78,15 +84,15 @@ pkg/
 - [x] Clean shutdown — no leaked goroutines, resultChan closes deterministically
 - [x] Structured execution logging
 
+### (v0.2)
+
+- [x] Resolve task dependencies via `DependsOn []string`
+- [x] Topological sort for execution ordering
+- [x] Parallel execution of independent tasks
+- [x] Block tasks until all dependencies complete
 ---
 
 ## Roadmap
-
-**v0.2 — DAG Scheduler**
-- Resolve task dependencies via `DependsOn []string`
-- Topological sort for execution ordering
-- Parallel execution of independent tasks
-- Block tasks until all dependencies complete
 
 **v0.3 — Manifest Parser**
 - YAML workflow definitions
