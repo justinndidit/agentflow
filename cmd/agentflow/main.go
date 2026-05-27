@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/justinndidit/agentflow/internal/engine"
@@ -18,15 +16,12 @@ func main() {
 		return
 	}
 
-	re := regexp.MustCompile(`\D`)
-	result := re.ReplaceAllString(workflow.DefaultTimeout, "")
-
-	timeout, err := strconv.Atoi(result)
+	timeout, err := time.ParseDuration(workflow.DefaultTimeout)
 	if err != nil {
 		fmt.Printf("error parsing default timeout: %s\n", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeout))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	executor := engine.NewExecutor(workflow.DefaultWorkerCount, 10)

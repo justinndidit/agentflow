@@ -1,7 +1,17 @@
-name: "test-workflow"
-workers: 2
+name: job-search-pipeline
+workers: 3
 timeout: 30s
-max_tokens: 1000
+max_tokens: 100000
+
 tasks:
-  - id: "task_1"
-    agent: "agent_1"
+  - id: search
+    agent: job-agent
+    input:
+      query: "software engineering"
+      location: "Canada"
+
+  - id: draft-letter
+    agent: writer-agent
+    depends_on: [search]
+    input:
+      role: "backend engineer"
