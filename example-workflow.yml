@@ -1,0 +1,7 @@
+name: "test-workflow"
+workers: 2
+timeout: 30s
+max_tokens: 1000
+tasks:
+  - id: "task_1"
+    agent: "agent_1"
