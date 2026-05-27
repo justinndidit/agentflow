@@ -90,14 +90,15 @@ pkg/
 - [x] Topological sort for execution ordering
 - [x] Parallel execution of independent tasks
 - [x] Block tasks until all dependencies complete
+
+### v0.3 — **Manifest Parser**
+
+- [x] YAML workflow definitions
+- [x] Template expressions (`{{ trigger.topic }}`)
+- [x] Schema validation
 ---
 
 ## Roadmap
-
-**v0.3 — Manifest Parser**
-- YAML workflow definitions
-- Template expressions (`{{ trigger.topic }}`)
-- Schema validation
 
 **v0.4 — Docker Agent Runtime**
 - Spawn Docker containers as workers
