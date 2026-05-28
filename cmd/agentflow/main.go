@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"time"
 
@@ -10,7 +11,10 @@ import (
 )
 
 func main() {
-	workflow, err := manifest.Parse("example-workflow.yml")
+	var manifestFile string
+	flag.StringVar(&manifestFile, "manifest", "example-workflow.yml", "workflow manifest location")
+	flag.Parse()
+	workflow, err := manifest.Parse(manifestFile)
 	if err != nil {
 		fmt.Printf("error parsing manifest file: %s\n", err)
 		return

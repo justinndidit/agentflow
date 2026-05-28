@@ -1,17 +1,248 @@
-name: job-search-pipeline
-workers: 3
-timeout: 30s
-max_tokens: 100000
+name: global-hiring-pipeline
+workers: 8
+timeout: 2m
+retry_policy:
+  max_retries: 3
+  backoff: exponential
+
+max_tokens: 250000
+
+env:
+  OPENAI_MODEL: gpt-5.5
+  REGION: us-east-1
+
+shared:
+  cache: true
+  artifact_dir: ./artifacts
+  logs_dir: ./logs
 
 tasks:
-  - id: search
-    agent: job-agent
-    input:
-      query: "software engineering"
-      location: "Canada"
+  # ============================================
+  # STAGE 1 — MARKET RESEARCH
+  # ============================================
 
-  - id: draft-letter
-    agent: writer-agent
-    depends_on: [search]
+  - id: collect-market-data
+    agent: research-agent
+    priority: high
     input:
-      role: "backend engineer"
+      roles:
+        - "backend engineer"
+        - "distributed systems engineer"
+        - "platform engineer"
+      locations:
+        - "Canada"
+        - "Germany"
+        - "Netherlands"
+      experience: "junior-mid"
+      salary_currency: "USD"
+
+  - id: scrape-job-boards
+    agent: scraper-agent
+    depends_on:
+      - collect-market-data
+    input:
+      sources:
+        - linkedin
+        - indeed
+        - greenhouse
+        - lever
+      keywords:
+        - "Go"
+        - "Java"
+        - "Kafka"
+        - "microservices"
+        - "distributed systems"
+
+  - id: deduplicate-jobs
+    agent: data-agent
+    depends_on:
+      - scrape-job-boards
+    input:
+      strategy: fuzzy-match
+      threshold: 0.82
+
+  - id: classify-companies
+    agent: intelligence-agent
+    depends_on:
+      - deduplicate-jobs
+    input:
+      classify_by:
+        - startup
+        - fintech
+        - big-tech
+        - infrastructure
+        - AI
+      enrich:
+        - funding_stage
+        - remote_policy
+        - visa_sponsorship
+
+  # ============================================
+  # STAGE 2 — PROFILE ANALYSIS
+  # ============================================
+
+  - id: analyze-resume
+    agent: resume-agent
+    input:
+      resume_path: ./input/resume.pdf
+      target_roles:
+        - "backend engineer"
+        - "platform engineer"
+
+  - id: analyze-github
+    agent: github-agent
+    input:
+      github_username: surgee
+      focus:
+        - architecture
+        - code_quality
+        - consistency
+        - technologies
+
+  - id: build-skill-gap-report
+    agent: career-agent
+    depends_on:
+      - analyze-resume
+      - analyze-github
+      - classify-companies
+    input:
+      compare_against_market: true
+
+  # ============================================
+  # STAGE 3 — MATCHING ENGINE
+  # ============================================
+
+  - id: rank-jobs
+    agent: matching-agent
+    depends_on:
+      - build-skill-gap-report
+      - classify-companies
+    input:
+      scoring:
+        tech_stack_weight: 0.4
+        salary_weight: 0.2
+        visa_weight: 0.2
+        growth_weight: 0.2
+
+  - id: filter-top-opportunities
+    agent: ranking-agent
+    depends_on:
+      - rank-jobs
+    input:
+      top_k: 20
+      minimum_match_score: 0.75
+
+  # ============================================
+  # STAGE 4 — DOCUMENT GENERATION
+  # ============================================
+
+  - id: generate-custom-resume
+    agent: writer-agent
+    depends_on:
+      - filter-top-opportunities
+    foreach: "{{ tasks.filter-top-opportunities.output.jobs }}"
+    input:
+      template: backend-modern
+      emphasize:
+        - distributed systems
+        - Kafka
+        - Go
+        - Java
+        - microservices
+
+  - id: generate-cover-letter
+    agent: writer-agent
+    depends_on:
+      - generate-custom-resume
+    foreach: "{{ tasks.filter-top-opportunities.output.jobs }}"
+    input:
+      tone: professional
+      personalization: high
+      include_company_research: true
+
+  - id: generate-outreach-message
+    agent: networking-agent
+    depends_on:
+      - classify-companies
+    foreach: "{{ tasks.filter-top-opportunities.output.jobs }}"
+    input:
+      platform: linkedin
+      style: concise
+
+  # ============================================
+  # STAGE 5 — TECHNICAL PREP
+  # ============================================
+
+  - id: generate-interview-questions
+    agent: interview-agent
+    depends_on:
+      - filter-top-opportunities
+    input:
+      categories:
+        - system-design
+        - concurrency
+        - Kafka
+        - Go
+        - Java
+        - databases
+        - distributed-systems
+
+  - id: create-study-plan
+    agent: mentor-agent
+    depends_on:
+      - build-skill-gap-report
+      - generate-interview-questions
+    input:
+      duration_weeks: 8
+      daily_hours: 4
+
+  # ============================================
+  # STAGE 6 — APPLICATION EXECUTION
+  # ============================================
+
+  - id: submit-applications
+    agent: automation-agent
+    depends_on:
+      - generate-custom-resume
+      - generate-cover-letter
+    approval_required: true
+    input:
+      auto_fill_forms: true
+      upload_documents: true
+
+  - id: track-application-status
+    agent: tracking-agent
+    depends_on:
+      - submit-applications
+    schedule:
+      every: 12h
+    input:
+      update_database: true
+      notify_on_change: true
+
+  # ============================================
+  # STAGE 7 — REPORTING
+  # ============================================
+
+  - id: generate-dashboard
+    agent: analytics-agent
+    depends_on:
+      - track-application-status
+    input:
+      metrics:
+        - applications_sent
+        - interviews_received
+        - response_rate
+        - top_regions
+        - salary_distribution
+
+  - id: notify-user
+    agent: notification-agent
+    depends_on:
+      - generate-dashboard
+    input:
+      channels:
+        - email
+        - telegram
+      include_summary: true
+      attach_reports: true
