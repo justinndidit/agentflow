@@ -1,7 +1,7 @@
 # Agentflow
 
 ![Agentflow executing a dependency-aware workflow](demo.gif)
-Agentflow is an open-source execution engine for AI workers.
+Agentflow is an execution engine for AI workers.
 
 Think of it as Kubernetes for AI agents — you bring the worker, Agentflow handles
 scheduling, lifecycle, cancellation, observability, and scale.
