@@ -121,7 +121,7 @@ pkg/
 ## Getting Started
 
 ```bash
-git clone https://github.com/surgeedidit/agentflow
+git clone https://github.com/justinndidit/agentflow
 cd agentflow
 go mod tidy
 go run cmd/agentflow/main.go
