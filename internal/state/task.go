@@ -19,20 +19,24 @@ const (
 )
 
 type Task struct {
-	ID         string
-	WorkflowID string
-	AgentID    string
-	DependsOn  []string //slice of dependency Tasks IDs
-	Status     TaskStatus
-	Payload    map[string]any
-	Result     map[string]any
-	Error      string
-	Retries    int
-	MaxRetries int
-	CreatedAt  time.Time
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	UpdatedAt  *time.Time
+	ID              string
+	WorkflowID      string
+	TaskKey         string //user defined name of task
+	AgentID         string
+	DependsOn       []string //slice of dependency Tasks IDs
+	RemainingDeps   int
+	Status          TaskStatus
+	Payload         map[string]any //input payload
+	Result          map[string]any //output payload
+	ErrorMessage    *string
+	Retries         int //RetryCount
+	EngineID        *string
+	MaxRetries      int
+	EngineHeartbeat *time.Time
+	CreatedAt       time.Time
+	StartedAt       *time.Time
+	FinishedAt      *time.Time
+	UpdatedAt       *time.Time
 
 	mu sync.Mutex
 }
