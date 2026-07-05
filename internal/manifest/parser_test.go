@@ -60,8 +60,8 @@ func TestParse_Valid(t *testing.T) {
 	if len(wf.Tasks) != 1 {
 		t.Errorf("Tasks length: expected 1, got %d", len(wf.Tasks))
 	}
-	if wf.Tasks[0].TaskID != "task1" {
-		t.Errorf("Task ID: expected 'task1', got %q", wf.Tasks[0].TaskID)
+	if wf.Tasks[0].TaskKey != "task1" {
+		t.Errorf("Task ID: expected 'task1', got %q", wf.Tasks[0].TaskKey)
 	}
 	if wf.Tasks[0].AgentID != "agent1" {
 		t.Errorf("AgentID: expected 'agent1', got %q", wf.Tasks[0].AgentID)
