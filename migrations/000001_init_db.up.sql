@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS workflows;
+DROP TYPE IF EXISTS task_status;
