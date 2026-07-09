@@ -4,8 +4,8 @@ package config
 import "github.com/rs/zerolog"
 
 type Config struct {
-	Database   *Database
-	Migrations *Migrations
+	Database    *Database
+	Application *Application
 }
 
 type Database struct {
@@ -22,8 +22,9 @@ type Database struct {
 	ConnMaxIdleTime int    `koanf:"conn_max_idle_time" validate:"required"`
 }
 
-type Migrations struct {
-	MigrationsPath string `koanf:"path" validate:"required"`
+type Application struct {
+	Environment    *string `koanf:"environment"`
+	MigrationsPath string  `koanf:"path" validate:"required"`
 }
 
 func LoadConfig(logger *zerolog.Logger) (*Config, error) {
@@ -35,8 +36,9 @@ func LoadConfig(logger *zerolog.Logger) (*Config, error) {
 			Password: "password",
 			Name:     "agentflow",
 		},
-		Migrations: &Migrations{
+		Application: &Application{
 			MigrationsPath: "file:///home/surgee/Desktop/core/agentflow/migrations",
+			Environment:    nil,
 		},
 	}, nil
 }

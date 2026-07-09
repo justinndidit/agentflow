@@ -1,6 +1,7 @@
 # Agentflow
 
 ![Agentflow executing a dependency-aware workflow](demo.gif)
+
 Agentflow is an open-source execution engine for AI workers.
 
 Think of it as Kubernetes for AI agents — you bring the worker, Agentflow handles
@@ -45,36 +46,68 @@ immediately rather than blocking indefinitely.
 ---
 
 ## Architecture
-[Architecture Diagrams](docs/agentflow_architecture.md)
 
-application structure
+[Full architecture blueprint](docs/agentflow_architecture.md)
+
+AgentFlow is moving from an in-memory, single-process engine toward a
+PostgreSQL-backed distributed coordination model — the same pattern
+Kubernetes' controller-manager and Temporal.io use: a durable state store
+as the single source of truth, with a reconciliation loop claiming and
+driving work forward instead of in-process channels.
+
 ```
 cmd/agentflow/
-    main.go                 — entry point
+    main.go                      — entry point
 
 internal/
+    config/
+        config.go                — app configuration
+
     engine/
-        dag.go              - Task Graph: Topological sorting of tasks
-        executor.go         - Executor: Initializes worker pool, runs waves of tasks
-        pool.go             — WorkerPool: Submit, Start, drain on cancellation
-        worker.go           — worker: run with context-aware cancellation
+        dag.go                   — Task Graph: topological sorting (Kahn's algorithm)
+        executor.go               — Executor: initializes worker pool, runs waves of tasks
+        manifest.go               — manifest → execution graph wiring
+        pool.go                   — WorkerPool: Submit, Start, drain on cancellation
+        worker.go                 — worker: run with context-aware cancellation
+
+    manifest/
+        parser.go                 — YAML workflow manifest parser, schema validation
+
+    persistence/
+        database/
+            database.go           — DB connection handling
+            migrator.go            — migration runner
+        domain/
+            agent.go               — Agent domain struct
+            base.go                 — shared base fields
+            task.go                  — Task domain struct
+            workflow.go              — Workflow domain struct
+        repositories/
+            repository.go           — shared repository interfaces
+            task.go                   — Task persistence
+            workflow.go                — Workflow persistence
+
+    runtime/
+        docker.go                  — Docker agent runtime (in progress)
 
     state/
-        task.go             — Task, TaskStatus, state machine with transition guards
+        task.go                     — Task, TaskStatus, state machine with transition guards
 
-    manifest/               — YAML workflow parser (coming in v0.2)
-    runtime/                — Docker agent runtime (coming in v0.2)
+migrations/
+    000001_init_db.up.sql / .down.sql   — schema migrations (workflows, tasks, enums, indexes)
 
 pkg/
     logger/
-        logger.go           — structured transition logging
+        logger.go                  — structured transition logging
+    set/
+        set.go                      — generic set utility
 ```
 
 ---
 
 ## What's Built
 
-### (v0.1)
+### v0.1 — In-Memory Concurrent Engine
 
 - [x] Concurrent worker pool with bounded concurrency
 - [x] Context-aware cancellation — workers stop cleanly mid-execution
@@ -84,31 +117,53 @@ pkg/
 - [x] Clean shutdown — no leaked goroutines, resultChan closes deterministically
 - [x] Structured execution logging
 
-### (v0.2)
+### v0.2 — Dependency-Aware Scheduling
 
 - [x] Resolve task dependencies via `DependsOn []string`
 - [x] Topological sort for execution ordering
 - [x] Parallel execution of independent tasks
 - [x] Block tasks until all dependencies complete
 
-### v0.3 — **Manifest Parser**
+### v0.3 — Manifest Parser
 
 - [x] YAML workflow definitions
 - [x] Template expressions (`{{ trigger.topic }}`)
 - [x] Schema validation
+
+### v0.4 — Durable State Store (in progress)
+
+- [x] PostgreSQL schema: `workflows` and `tasks` tables, `task_status` enum
+- [x] Migration tooling (`golang-migrate`-style up/down files)
+- [x] Partial indexes for the reconciliation hot path (`idx_tasks_ready`, `idx_tasks_orphan`)
+- [x] Domain structs separated from DB row structs (`persistence/domain`)
+- [x] Repository layer for workflows and tasks
+- [ ] Task dependency resolution: mapping manifest `task_key` strings to
+      database UUIDs before building domain objects
+- [ ] Atomic `TransitionTask(ctx, taskID, from, to)` with invariant guards
+- [ ] `SELECT FOR UPDATE SKIP LOCKED` reconciliation loop
+
 ---
 
 ## Roadmap
 
-**v0.4 — Docker Agent Runtime**
-- Spawn Docker containers as workers
-- Pass typed input via A2A protocol
-- Collect output, enforce resource limits
+**v0.5 — Reconciliation Engine**
+- Decoupled reconciliation loop (poll → claim → mark running → execute)
+- Heartbeat writer + orphan task sweeper (self-healing on crash)
+- Graceful shutdown — in-flight tasks drain before exit
 
-**v0.5 — Observability**
-- Full execution traces per workflow
-- Token usage and cost tracking
+**v0.6 — Docker Sandbox Runtime**
+- Spawn Docker containers as workers via the Docker SDK
+- Hard resource enforcement: CPU/memory limits, read-only rootfs
+- A2A protocol I/O broker: stdout/stdin contracts, output schema validation
+
+**v0.7 — Observability**
+- Full execution traces per workflow (OpenTelemetry)
+- Prometheus metrics: queue depth, execution latency, orphan reclamations
 - Failure root-cause analysis
+
+**v0.8 — Chaos Verification**
+- Integration test harness against real PostgreSQL (testcontainers-go)
+- Fault injection: mid-task crash, dual-engine race, container OOM, cyclic manifest rejection
 
 **Forge — Managed Cloud**
 - Hosted Agentflow clusters
@@ -121,7 +176,7 @@ pkg/
 ## Getting Started
 
 ```bash
-git clone https://github.com/surgeedidit/agentflow
+git clone https://github.com/justinndidit/agentflow
 cd agentflow
 go mod tidy
 go run cmd/agentflow/main.go
@@ -146,6 +201,12 @@ All done!
 probabilistic, execution control is deterministic. The engine always
 behaves predictably.
 
+**Databases coordinate systems, channels coordinate goroutines** — as
+AgentFlow moves from in-process channels to a PostgreSQL-backed
+reconciliation loop, this is the guiding line: channels are the wrong
+primitive for work that must survive process restarts and scale across
+nodes.
+
 **Reliability over intelligence** — Agentflow does not make AI workers
 smarter. It makes them operationally reliable.
 
@@ -160,9 +221,10 @@ emergent layers. The execution engine is the product.
 ## Built With
 
 - [Go](https://golang.org) — runtime and engine
-- Docker — worker sandboxing (v0.4)
-- A2A Protocol — agent communication standard (v0.4)
-- OpenTelemetry — distributed tracing (v0.5)
+- PostgreSQL — durable state store, `SELECT FOR UPDATE SKIP LOCKED` coordination
+- Docker — worker sandboxing (v0.6)
+- A2A Protocol — agent communication standard (v0.6)
+- OpenTelemetry — distributed tracing (v0.7)
 
 ---
 
