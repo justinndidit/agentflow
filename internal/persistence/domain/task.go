@@ -18,6 +18,7 @@ type Task struct {
 	OutputPayload   []byte      `json:"output_payload" db:"output_payload"`
 	EngineID        *string     `json:"engine_id,omitempty" db:"engine_id"`
 	EngineHeartBeat *time.Time  `json:"-" db:"engine_heartbeat"`
+	Lease_Epoch     int         `json:"-" db:"lease_epoch"`
 	StartedAt       *time.Time  `json:"started_at" db:"started_at"`
 	FinishedAt      *time.Time  `json:"finished_at" db:"finished_at"`
 	ErrorMessage    *string     `json:"error_message,omitempty" db:"error_message"`
