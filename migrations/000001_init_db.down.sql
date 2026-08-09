@@ -1,4 +1,7 @@
 DROP TABLE IF EXISTS tasks;
-DROP TABLE IF EXISTS agents;
 DROP TABLE IF EXISTS workflows;
+DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS engines;
 DROP TYPE IF EXISTS task_status;
+DROP TYPE IF EXISTS workflow_status;
+DROP TYPE IF EXISTS engine_status;

@@ -8,8 +8,6 @@ import (
 	"time"
 
 	validator "github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
-	"github.com/justinndidit/agentflow/internal/state"
 	yaml "go.yaml.in/yaml/v3"
 )
 
@@ -23,33 +21,29 @@ const (
 	CancelledWorkflowStatus WorkflowStatus = "cancelled"
 )
 
-type Workflow struct {
-	WorkflowName       string           `yaml:"name" validate:"required"`
-	WorkflowNameSpace  string           `yaml:"namespace" validate:"required"`
-	DefaultWorkerCount int              `yaml:"workers" validate:"required"`
-	DefaultTimeout     string           `yaml:"timeout" validate:"required"`
-	MaxTokensPerRun    int64            `yaml:"max_tokens" validate:"required"`
-	Tasks              []TaskDefinition `yaml:"tasks" validate:"required"`
-
-	//internal tracking
-	Manifest []byte
-	Version  int
-	//TODO: create in app primitive
-	Status WorkflowStatus
+type WorkflowDefinition struct {
+	WorkflowName       string            `yaml:"name" validate:"required"`
+	WorkflowNameSpace  string            `yaml:"namespace" validate:"required"`
+	DefaultWorkerCount int               `yaml:"workers" validate:"required"`
+	DefaultTimeout     string            `yaml:"timeout" validate:"required"`
+	MaxTokensPerRun    int64             `yaml:"max_tokens" validate:"required"`
+	Tasks              []*TaskDefinition `yaml:"tasks" validate:"required"`
+	Version            int               `yaml:"workflow_version"`
 }
 
 type TaskDefinition struct {
-	TaskKey   string         `yaml:"task_key" validate:"required"`
-	AgentID   string         `yaml:"agent" validate:"required"`
-	Input     map[string]any `yaml:"input"`
-	DependsOn []string       `yaml:"depends_on"`
-
-	//internal tracking
-	ID         *uuid.UUID
-	WorkflowID *uuid.UUID
+	TaskKey    string         `yaml:"task_key" validate:"required"`
+	AgentName  string         `yaml:"agent" validate:"required"`
+	Input      map[string]any `yaml:"input"`
+	Output     map[string]any `yaml:"output"`
+	DependsOn  []string       `yaml:"depends_on"`
+	Priority   int8           `yaml:"priority"`
+	NotBefore  *time.Time     `yaml:"not_before"`
+	MaxRetries int            `yaml:"max_retries"`
+	Timeout    *int64         `yaml:"timeout"`
 }
 
-func Parse(fileLocation string) (*Workflow, error) {
+func Parse(fileLocation string) (*WorkflowDefinition, []byte, error) {
 	validate := validator.New()
 	seen := map[string]bool{}
 
@@ -58,31 +52,27 @@ func Parse(fileLocation string) (*Workflow, error) {
 	if !filepath.IsAbs(fileLocation) {
 		wd, err := os.Getwd()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		filePath = filepath.Join(wd, fileLocation)
 	}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var workflow Workflow
+	var workflow WorkflowDefinition
 	if err = yaml.Unmarshal(data, &workflow); err != nil {
-		return nil, err
+		return nil, data, err
 	}
 
 	if err = validate.Struct(workflow); err != nil {
-		return nil, err
+		return nil, data, err
 	}
-
-	workflow.Manifest = data
-	workflow.Version = 0
-	workflow.Status = PendingWorkflowStatus
 
 	for _, task := range workflow.Tasks {
 		if seen[task.TaskKey] {
-			return nil, fmt.Errorf("duplicate task id: %s", task.TaskKey)
+			return nil, data, fmt.Errorf("duplicate task id: %s", task.TaskKey)
 		}
 		seen[task.TaskKey] = true
 	}
@@ -90,28 +80,10 @@ func Parse(fileLocation string) (*Workflow, error) {
 	for _, task := range workflow.Tasks {
 		for _, dependency := range task.DependsOn {
 			if !seen[dependency] {
-				return nil, fmt.Errorf("task %s depends on unknown task with task key %s", task.TaskKey, dependency)
+				return nil, data, fmt.Errorf("task %s depends on unknown task with task key %s", task.TaskKey, dependency)
 			}
 		}
 	}
 
-	return &workflow, nil
-}
-
-func (wf *Workflow) ToTasks() []*state.Task {
-	tasks := []*state.Task{}
-	for _, taskDefinition := range wf.Tasks {
-		task := &state.Task{
-			TaskKey:    taskDefinition.TaskKey,
-			WorkflowID: wf.WorkflowName, //TODO: update workflow to include ID
-			AgentID:    taskDefinition.AgentID,
-			DependsOn:  taskDefinition.DependsOn,
-			Status:     state.PendingTaskStatus,
-			Payload:    taskDefinition.Input,
-			CreatedAt:  time.Now(),
-		}
-		tasks = append(tasks, task)
-	}
-
-	return tasks
+	return &workflow, data, nil
 }

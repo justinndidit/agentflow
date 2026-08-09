@@ -4,13 +4,13 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/justinndidit/agentflow/internal/persistence/domain"
+	"github.com/justinndidit/agentflow/internal/persistence/models"
 )
 
 type WorkflowStore interface {
-	CreateWorkflow(context.Context, *domain.Workflow) (*domain.Workflow, error)
-	GetWorkflowByName(context.Context, string) (*domain.Workflow, error)
-	GetWorkflowByID(context.Context, uuid.UUID) (*domain.Workflow, error)
+	CreateWorkflow(context.Context, *models.WorkflowRow) (*models.WorkflowRow, error)
+	GetWorkflowByName(context.Context, string) (*models.WorkflowRow, error)
+	GetWorkflowByID(context.Context, uuid.UUID) (*models.WorkflowRow, error)
 	DeleteWorkflow(context.Context, uuid.UUID) error
 }
 
@@ -24,15 +24,15 @@ func NewPostgresWorkflowStore(repo Repository) *PostgresWorkflowStore {
 	}
 }
 
-func (p *PostgresWorkflowStore) CreateWorkflow(context.Context, *domain.Workflow) (*domain.Workflow, error) {
+func (p *PostgresWorkflowStore) CreateWorkflow(context.Context, *models.WorkflowRow) (*models.WorkflowRow, error) {
 	return nil, nil
 }
 
-func (p *PostgresWorkflowStore) GetWorkflowByName(context.Context, string) (*domain.Workflow, error) {
+func (p *PostgresWorkflowStore) GetWorkflowByName(context.Context, string) (*models.WorkflowRow, error) {
 	return nil, nil
 }
 
-func (p *PostgresWorkflowStore) GetWorkflowByID(context.Context, uuid.UUID) (*domain.Workflow, error) {
+func (p *PostgresWorkflowStore) GetWorkflowByID(context.Context, uuid.UUID) (*models.WorkflowRow, error) {
 	return nil, nil
 }
 

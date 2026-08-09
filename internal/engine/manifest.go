@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/justinndidit/agentflow/internal/manifest"
-	"github.com/justinndidit/agentflow/internal/persistence/domain"
+	"github.com/justinndidit/agentflow/internal/persistence/models"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/rs/zerolog"
 )
@@ -23,13 +23,12 @@ func NewManifestProcessor(
 	}
 }
 
-func (p *manifestProcessor) SubmitManifest(ctx context.Context, manifestFileLocation string) (*domain.Workflow, error) {
-	workflow, err := manifest.Parse(manifestFileLocation)
+func (p *manifestProcessor) SubmitManifest(ctx context.Context, manifestFileLocation string) (*models.WorkflowRow, error) {
+	workflow, definitionByte, err := manifest.Parse(manifestFileLocation)
 	if err != nil {
 		return nil, err
 	}
-	manifestTask := workflow.ToTasks()
-	graph, err := NewGraph(manifestTask)
+	graph, err := NewGraph(workflow.Tasks)
 	if err != nil {
 		p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("error building task graph")
 		return nil, err
@@ -42,25 +41,25 @@ func (p *manifestProcessor) SubmitManifest(ctx context.Context, manifestFileLoca
 		return nil, err
 	}
 
-	wf, err := domain.NewWorkflow(workflow)
+	wf, err := models.NewWorkflowRowFromDefinition(*workflow, definitionByte)
 	if err != nil {
-		p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("failed to create domain workflow")
+		p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("failed to create models workflow")
 		return nil, err
 	}
 
-	newTasks := []*domain.Task{}
-	for _, t := range manifestTask {
-		newTask, err := domain.NewTask(wf.ID, t)
+	newTasks := []*models.TaskRow{}
+	for _, t := range workflow.Tasks {
+		newTask, err := models.NewTaskFromDefinition(*t, wf.ID)
 		if err != nil {
-			p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("failed to create domain task")
+			p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("failed to create models task")
 			return nil, err
 		}
-		newTasks = append(newTasks, newTask)
+		newTasks = append(newTasks, &newTask)
 	}
 
-	var workflowDB *domain.Workflow
+	var workflowDB *models.WorkflowRow
 	err = p.txManager.WithTransaction(ctx, func(ctx context.Context, stores *repositories.Stores) error {
-		workflowDB, err = stores.WorkflowStore.CreateWorkflow(ctx, wf)
+		workflowDB, err = stores.WorkflowStore.CreateWorkflow(ctx, &wf)
 		if err != nil {
 			p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("failed to create workflow")
 			return err

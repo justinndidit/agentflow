@@ -54,20 +54,20 @@ func main() {
 		return
 	}
 
-	timeout, err := time.ParseDuration(workflow.DefaultTimeout)
+	timeout := time.Duration(workflow.DefaultTimeout)
 	if err != nil {
 		fmt.Printf("error parsing default timeout: %s\n", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(startContext, timeout)
+	_, cancel := context.WithTimeout(startContext, timeout)
 	defer cancel()
 
-	executor := engine.NewExecutor(workflow.DefaultWorkerCount, 10)
+	// executor := engine.NewExecutor(workflow.DefaultWorkerCount, 10)
 	//TODO: update Run() to only accept context then pull tasks from db
-	if err := executor.Run(ctx, nil); err != nil {
-		fmt.Printf("workflow failed: %s\n", err)
-		return
-	}
+	// if err := executor.Run(ctx, nil); err != nil {
+	// 	fmt.Printf("workflow failed: %s\n", err)
+	// 	return
+	// }
 
 	fmt.Println("workflow completed successfully!")
 }

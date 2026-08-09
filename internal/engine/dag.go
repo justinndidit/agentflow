@@ -3,21 +3,21 @@ package engine
 import (
 	"fmt"
 
-	"github.com/justinndidit/agentflow/internal/state"
+	"github.com/justinndidit/agentflow/internal/manifest"
 	"github.com/justinndidit/agentflow/pkg/set"
 )
 
 type Graph struct {
-	Tasks map[string]*state.Task
+	Tasks map[string]*manifest.TaskDefinition
 }
 
-func NewGraph(tasks []*state.Task) (*Graph, error) {
+func NewGraph(tasks []*manifest.TaskDefinition) (*Graph, error) {
 	g := &Graph{
-		Tasks: make(map[string]*state.Task),
+		Tasks: make(map[string]*manifest.TaskDefinition),
 	}
 
 	for _, t := range tasks {
-		g.Tasks[t.ID] = t
+		g.Tasks[t.TaskKey] = t
 	}
 
 	return g, nil
@@ -26,15 +26,15 @@ func NewGraph(tasks []*state.Task) (*Graph, error) {
 // TopologicalSort returns tasks grouped by execution wave
 // wave 0 runs first, wave 1 runs after wave 0 completes, etc.
 // tasks in the same wave run in parallel
-func (g *Graph) TopologicalSort() ([][]*state.Task, error) {
-	result := [][]*state.Task{}
-	startNodes := set.NewSet[*state.Task]()
+func (g *Graph) TopologicalSort() ([][]*manifest.TaskDefinition, error) {
+	result := [][]*manifest.TaskDefinition{}
+	startNodes := set.NewSet[*manifest.TaskDefinition]()
 
 	//extract dependency count for each task  specified in graph
 	//find adjacent tasks
 	taskDependencyCount := map[string]int{}
 	//represents a map of TaskID to tasks that TaskID unblocks
-	adjacentTasks := map[string][]*state.Task{}
+	adjacentTasks := map[string][]*manifest.TaskDefinition{}
 
 	for key, task := range g.Tasks {
 		dependencyLength := len(task.DependsOn)
@@ -55,10 +55,10 @@ func (g *Graph) TopologicalSort() ([][]*state.Task, error) {
 
 		//start nodes have no inbound edges
 		for _, startNode := range currentWave {
-			for _, task := range adjacentTasks[startNode.ID] {
-				taskDependencyCount[task.ID]--
+			for _, task := range adjacentTasks[startNode.TaskKey] {
+				taskDependencyCount[task.TaskKey]--
 
-				if taskDependencyCount[task.ID] == 0 {
+				if taskDependencyCount[task.TaskKey] == 0 {
 					startNodes.Add(task)
 				}
 			}

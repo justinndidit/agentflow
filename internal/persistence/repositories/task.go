@@ -4,11 +4,11 @@ import (
 	"context"
 
 	"github.com/justinndidit/agentflow/internal/manifest"
-	"github.com/justinndidit/agentflow/internal/persistence/domain"
+	"github.com/justinndidit/agentflow/internal/persistence/models"
 )
 
 type TaskStore interface {
-	BulkInsertTask(context.Context, []*domain.Task) error
+	BulkInsertTask(context.Context, []*models.TaskRow) error
 	UpdateTask(context.Context, *manifest.TaskDefinition) error
 }
 
@@ -22,7 +22,7 @@ func NewPostgresTaskStore(repo Repository) *PostgresTaskStore {
 	}
 }
 
-func (p *PostgresTaskStore) BulkInsertTask(ctx context.Context, tasks []*domain.Task) error {
+func (p *PostgresTaskStore) BulkInsertTask(ctx context.Context, tasks []*models.TaskRow) error {
 	return nil
 }
 
