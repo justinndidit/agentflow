@@ -24,6 +24,7 @@ func NewManifestProcessor(
 }
 
 func (p *manifestProcessor) SubmitManifest(ctx context.Context, manifestFileLocation string) (*models.WorkflowRow, error) {
+	p.logger.Info().Str("func", "SubmitManifest").Msg("submitManifest request")
 	workflow, definitionByte, err := manifest.Parse(manifestFileLocation)
 	if err != nil {
 		return nil, err

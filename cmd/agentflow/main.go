@@ -45,6 +45,17 @@ func main() {
 		}
 	}()
 
+	dbMigrator, err := database.NewMigrator(cfg.Migrations, db.Pool, &logger)
+	if err != nil {
+		logger.Error().Err(err).Str("func", "main").Msg("failed to create db migrator")
+		return
+	}
+	err = dbMigrator.Migrate(startContext)
+	if err != nil {
+		logger.Error().Err(err).Str("func", "main").Msg("failed to migrate to database")
+		return
+	}
+
 	txManager := repositories.NewTxManager(db.Pool, &logger)
 	manifestProcessor := engine.NewManifestProcessor(&logger, txManager)
 
@@ -55,10 +66,7 @@ func main() {
 	}
 
 	timeout := time.Duration(workflow.DefaultTimeout)
-	if err != nil {
-		fmt.Printf("error parsing default timeout: %s\n", err)
-		return
-	}
+
 	_, cancel := context.WithTimeout(startContext, timeout)
 	defer cancel()
 
@@ -69,5 +77,5 @@ func main() {
 	// 	return
 	// }
 
-	fmt.Println("workflow completed successfully!")
+	fmt.Println("workflow submitted successfully!")
 }

@@ -86,17 +86,23 @@ func NewTaskFromDefinition(t manifest.TaskDefinition, workflowID uuid.UUID) (Tas
 	if err != nil {
 		return TaskRow{}, err
 	}
+	// Valid must be set. A pgtype value with Valid=false encodes as NULL no
+	// matter what the other fields hold, so omitting it writes no timeout at all.
 	timeout := pgtype.Interval{
 		Microseconds: data.ConvertSecondsToMicroSeconds(t.TimeoutInSeconds),
+		Valid:        true,
 	}
 
 	return TaskRow{
-		BaseModel:     NewBaseModel(),
-		WorkflowID:    workflowID,
-		TaskKey:       t.TaskKey,
-		AgentName:     t.AgentName,
-		Status:        string(state.PendingTaskStatus),
-		DependsOn:     t.DependsOn,
+		BaseModel:  NewBaseModel(),
+		WorkflowID: workflowID,
+		TaskKey:    t.TaskKey,
+		AgentName:  t.AgentName,
+		Status:     string(state.PendingTaskStatus),
+		DependsOn:  t.DependsOn,
+		// The scheduler treats remaining_deps == 0 as "ready to run", so it has
+		// to start at the number of dependencies this task was declared with.
+		RemainingDeps: len(t.DependsOn),
 		InputTemplate: input,
 		Priority:      t.Priority,
 		NotBefore:     t.NotBefore,

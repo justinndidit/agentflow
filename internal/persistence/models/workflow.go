@@ -21,6 +21,7 @@ type WorkflowRow struct {
 	MaxParallelism    int           `db:"max_parallelism"` //worker count
 	RunningCount      int           `db:"running_count"`
 	MaxTokensPerRun   int64         `db:"max_tokens"`
+	TokensUsed        int64         `db:"tokens_used"`
 	DefaultTimeout    time.Duration `db:"default_timeout"`
 }
 

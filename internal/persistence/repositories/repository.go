@@ -85,8 +85,9 @@ func (t *TxManager) WithTransaction(ctx context.Context, fn func(ctx context.Con
 
 	defer func() {
 		if p := recover(); p != nil {
-			err = tx.Rollback(ctx)
-			t.logger.Error().Err(err).Str("func", "WithTransaction").Msg("failed to rollback transaction")
+			if rbErr := tx.Rollback(ctx); rbErr != nil {
+				t.logger.Error().Err(rbErr).Str("func", "WithTransaction").Msg("failed to rollback transaction")
+			}
 			panic(p)
 		}
 	}()
@@ -94,10 +95,14 @@ func (t *TxManager) WithTransaction(ctx context.Context, fn func(ctx context.Con
 	repo := NewPostgresRepository(t.db, t.logger, tx)
 	stores := NewStore(repo)
 
+	// The rollback result goes into its own variable. Assigning it to err would
+	// replace the reason the transaction failed with the outcome of cleaning up
+	// after it — and a successful rollback returns nil, turning a failed
+	// transaction into a silent success.
 	if err = fn(ctx, stores); err != nil {
-		err = tx.Rollback(ctx)
-		t.logger.Error().Err(err).Str("func", "WithTransaction").Msg("failed to rollback transaction")
-
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			t.logger.Error().Err(rbErr).Str("func", "WithTransaction").Msg("failed to rollback transaction")
+		}
 		return err
 	}
 

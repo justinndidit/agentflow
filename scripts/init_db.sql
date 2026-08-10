@@ -2,7 +2,7 @@
 -- This script runs ONCE when PostgreSQL container first starts.
 -- It creates necessary databases and enables extensions/functions in each.
 
-CREATE DATABASE agentflowdb;
+CREATE DATABASE agentflow;
 
 \c agentflowdb;
 
