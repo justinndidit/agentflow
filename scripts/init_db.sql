@@ -4,7 +4,7 @@
 
 CREATE DATABASE agentflow;
 
-\c agentflowdb;
+\c agentflow;
 
 -- Enable UUID and text search extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
