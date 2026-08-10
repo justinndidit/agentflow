@@ -13,7 +13,7 @@ BEGIN
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'workflow_status') THEN
-        CREATE TYPE engine_status AS ENUM (
+        CREATE TYPE workflow_status AS ENUM (
             'pending', 'running', 'completed', 'failed', 'cancelled'
         );
     END IF;

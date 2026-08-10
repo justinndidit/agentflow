@@ -32,15 +32,15 @@ type WorkflowDefinition struct {
 }
 
 type TaskDefinition struct {
-	TaskKey    string         `yaml:"task_key" validate:"required"`
-	AgentName  string         `yaml:"agent" validate:"required"`
-	Input      map[string]any `yaml:"input"`
-	Output     map[string]any `yaml:"output"`
-	DependsOn  []string       `yaml:"depends_on"`
-	Priority   int8           `yaml:"priority"`
-	NotBefore  *time.Time     `yaml:"not_before"`
-	MaxRetries int            `yaml:"max_retries"`
-	Timeout    *int64         `yaml:"timeout"`
+	TaskKey          string         `yaml:"task_key" validate:"required"`
+	AgentName        string         `yaml:"agent" validate:"required"`
+	Input            map[string]any `yaml:"input"`
+	Output           map[string]any `yaml:"output"`
+	DependsOn        []string       `yaml:"depends_on"`
+	Priority         int8           `yaml:"priority"`
+	NotBefore        *time.Time     `yaml:"not_before"`
+	MaxRetries       int            `yaml:"max_retries"`
+	TimeoutInSeconds int64          `yaml:"timeout"`
 }
 
 func Parse(fileLocation string) (*WorkflowDefinition, []byte, error) {
