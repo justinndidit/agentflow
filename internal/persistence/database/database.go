@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/url"
 	"strconv"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/justinndidit/agentflow/internal/config"
@@ -71,10 +70,10 @@ func initializeDB(ctx context.Context, cfg *config.Database) (*pgxpool.Pool, err
 		return nil, fmt.Errorf("failed to parse database DSN: %w", err)
 	}
 
-	pgxPoolConfig.MaxConns = int32(cfg.MaxOpenConns)
-	pgxPoolConfig.MinConns = int32(cfg.MaxIdleConns)
-	pgxPoolConfig.MaxConnLifetime = time.Duration(cfg.ConnMaxIdleTime) * time.Second
-	pgxPoolConfig.HealthCheckPeriod = time.Minute
+	// pgxPoolConfig.MaxConns = int32(cfg.MaxOpenConns)
+	// pgxPoolConfig.MinConns = int32(cfg.MaxIdleConns)
+	// pgxPoolConfig.MaxConnLifetime = time.Duration(cfg.ConnMaxIdleTime) * time.Second
+	// pgxPoolConfig.HealthCheckPeriod = time.Minute
 
 	pool, err := pgxpool.NewWithConfig(ctx, pgxPoolConfig)
 	if err != nil {

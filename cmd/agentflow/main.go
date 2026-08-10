@@ -45,6 +45,17 @@ func main() {
 		}
 	}()
 
+	dbMigrator, err := database.NewMigrator(cfg.Migrations, db.Pool, &logger)
+	if err != nil {
+		logger.Error().Err(err).Str("func", "main").Msg("failed to create db migrator")
+		return
+	}
+	err = dbMigrator.Migrate(startContext)
+	if err != nil {
+		logger.Error().Err(err).Str("func", "main").Msg("failed to migrate to database")
+		return
+	}
+
 	txManager := repositories.NewTxManager(db.Pool, &logger)
 	manifestProcessor := engine.NewManifestProcessor(&logger, txManager)
 
@@ -54,20 +65,17 @@ func main() {
 		return
 	}
 
-	timeout, err := time.ParseDuration(workflow.DefaultTimeout)
-	if err != nil {
-		fmt.Printf("error parsing default timeout: %s\n", err)
-		return
-	}
-	ctx, cancel := context.WithTimeout(startContext, timeout)
+	timeout := time.Duration(workflow.DefaultTimeout)
+
+	_, cancel := context.WithTimeout(startContext, timeout)
 	defer cancel()
 
-	executor := engine.NewExecutor(workflow.DefaultWorkerCount, 10)
+	// executor := engine.NewExecutor(workflow.DefaultWorkerCount, 10)
 	//TODO: update Run() to only accept context then pull tasks from db
-	if err := executor.Run(ctx, nil); err != nil {
-		fmt.Printf("workflow failed: %s\n", err)
-		return
-	}
+	// if err := executor.Run(ctx, nil); err != nil {
+	// 	fmt.Printf("workflow failed: %s\n", err)
+	// 	return
+	// }
 
-	fmt.Println("workflow completed successfully!")
+	fmt.Println("workflow submitted successfully!")
 }
