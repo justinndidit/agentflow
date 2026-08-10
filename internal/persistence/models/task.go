@@ -87,7 +87,7 @@ func NewTaskFromDefinition(t manifest.TaskDefinition, workflowID uuid.UUID) (Tas
 		return TaskRow{}, err
 	}
 	timeout := pgtype.Interval{
-		Microseconds: t.TimeoutInSeconds * 1000,
+		Microseconds: data.ConvertSecondsToMicroSeconds(t.TimeoutInSeconds),
 	}
 
 	return TaskRow{

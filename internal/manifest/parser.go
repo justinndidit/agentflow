@@ -32,15 +32,15 @@ type WorkflowDefinition struct {
 }
 
 type TaskDefinition struct {
-	TaskKey          string         `yaml:"task_key" validate:"required"`
-	AgentName        string         `yaml:"agent" validate:"required"`
-	Input            map[string]any `yaml:"input"`
-	Output           map[string]any `yaml:"output"`
-	DependsOn        []string       `yaml:"depends_on"`
-	Priority         int8           `yaml:"priority"`
-	NotBefore        *time.Time     `yaml:"not_before"`
-	MaxRetries       int            `yaml:"max_retries"`
-	TimeoutInSeconds int64          `yaml:"timeout"`
+	TaskKey   string         `yaml:"task_key" validate:"required"`
+	AgentName string         `yaml:"agent" validate:"required"`
+	Input     map[string]any `yaml:"input"`
+	// Output           map[string]any `yaml:"output"`
+	DependsOn        []string   `yaml:"depends_on"`
+	Priority         int8       `yaml:"priority"`
+	NotBefore        *time.Time `yaml:"not_before"`
+	MaxRetries       int        `yaml:"max_retries" validate:"gte=0"`
+	TimeoutInSeconds int64      `yaml:"timeout" validate:"required"`
 }
 
 func Parse(fileLocation string) (*WorkflowDefinition, []byte, error) {
@@ -83,6 +83,10 @@ func Parse(fileLocation string) (*WorkflowDefinition, []byte, error) {
 				return nil, data, fmt.Errorf("task %s depends on unknown task with task key %s", task.TaskKey, dependency)
 			}
 		}
+	}
+
+	if err = validateTemplateReferences(workflow.Tasks, seen); err != nil {
+		return nil, data, err
 	}
 
 	return &workflow, data, nil

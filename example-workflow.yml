@@ -1,29 +1,20 @@
 name: global-hiring-pipeline
+namespace: default
+workflow_version: 1
 workers: 8
 timeout: 2m
-retry_policy:
-  max_retries: 3
-  backoff: exponential
-
 max_tokens: 250000
-
-env:
-  OPENAI_MODEL: gpt-5.5
-  REGION: us-east-1
-
-shared:
-  cache: true
-  artifact_dir: ./artifacts
-  logs_dir: ./logs
 
 tasks:
   # ============================================
   # STAGE 1 — MARKET RESEARCH
   # ============================================
 
-  - id: collect-market-data
+  - task_key: collect-market-data
     agent: research-agent
-    priority: high
+    priority: 4
+    max_retries: 3
+    timeout: 300
     input:
       roles:
         - "backend engineer"
@@ -36,8 +27,11 @@ tasks:
       experience: "junior-mid"
       salary_currency: "USD"
 
-  - id: scrape-job-boards
+  - task_key: scrape-job-boards
     agent: scraper-agent
+    priority: 2
+    max_retries: 3
+    timeout: 600
     depends_on:
       - collect-market-data
     input:
@@ -53,16 +47,22 @@ tasks:
         - "microservices"
         - "distributed systems"
 
-  - id: deduplicate-jobs
+  - task_key: deduplicate-jobs
     agent: data-agent
+    priority: 2
+    max_retries: 2
+    timeout: 180
     depends_on:
       - scrape-job-boards
     input:
       strategy: fuzzy-match
       threshold: 0.82
 
-  - id: classify-companies
+  - task_key: classify-companies
     agent: intelligence-agent
+    priority: 2
+    max_retries: 2
+    timeout: 300
     depends_on:
       - deduplicate-jobs
     input:
@@ -81,16 +81,22 @@ tasks:
   # STAGE 2 — PROFILE ANALYSIS
   # ============================================
 
-  - id: analyze-resume
+  - task_key: analyze-resume
     agent: resume-agent
+    priority: 4
+    max_retries: 2
+    timeout: 120
     input:
       resume_path: ./input/resume.pdf
       target_roles:
         - "backend engineer"
         - "platform engineer"
 
-  - id: analyze-github
+  - task_key: analyze-github
     agent: github-agent
+    priority: 2
+    max_retries: 2
+    timeout: 180
     input:
       github_username: surgee
       focus:
@@ -99,8 +105,11 @@ tasks:
         - consistency
         - technologies
 
-  - id: build-skill-gap-report
+  - task_key: build-skill-gap-report
     agent: career-agent
+    priority: 2
+    max_retries: 2
+    timeout: 180
     depends_on:
       - analyze-resume
       - analyze-github
@@ -112,8 +121,11 @@ tasks:
   # STAGE 3 — MATCHING ENGINE
   # ============================================
 
-  - id: rank-jobs
+  - task_key: rank-jobs
     agent: matching-agent
+    priority: 2
+    max_retries: 2
+    timeout: 120
     depends_on:
       - build-skill-gap-report
       - classify-companies
@@ -124,8 +136,11 @@ tasks:
         visa_weight: 0.2
         growth_weight: 0.2
 
-  - id: filter-top-opportunities
+  - task_key: filter-top-opportunities
     agent: ranking-agent
+    priority: 2
+    max_retries: 1
+    timeout: 60
     depends_on:
       - rank-jobs
     input:
@@ -136,12 +151,16 @@ tasks:
   # STAGE 4 — DOCUMENT GENERATION
   # ============================================
 
-  - id: generate-custom-resume
+  - task_key: generate-custom-resume
     agent: writer-agent
+    priority: 2
+    max_retries: 2
+    timeout: 300
     depends_on:
       - filter-top-opportunities
-    foreach: "{{ tasks.filter-top-opportunities.output.jobs }}"
     input:
+      # template expressions are stored unresolved and resolved at dispatch (not yet implemented)
+      jobs: "{{ tasks.filter-top-opportunities.output.jobs }}"
       template: backend-modern
       emphasize:
         - distributed systems
@@ -150,31 +169,42 @@ tasks:
         - Java
         - microservices
 
-  - id: generate-cover-letter
+  - task_key: generate-cover-letter
     agent: writer-agent
+    priority: 2
+    max_retries: 2
+    timeout: 300
     depends_on:
       - generate-custom-resume
-    foreach: "{{ tasks.filter-top-opportunities.output.jobs }}"
+      - filter-top-opportunities
     input:
+      jobs: "{{ tasks.filter-top-opportunities.output.jobs }}"
       tone: professional
       personalization: high
       include_company_research: true
 
-  - id: generate-outreach-message
+  - task_key: generate-outreach-message
     agent: networking-agent
+    priority: 1
+    max_retries: 2
+    timeout: 180
     depends_on:
       - classify-companies
-    foreach: "{{ tasks.filter-top-opportunities.output.jobs }}"
     input:
       platform: linkedin
+
       style: concise
 
   # ============================================
   # STAGE 5 — TECHNICAL PREP
   # ============================================
 
-  - id: generate-interview-questions
+  - task_key: generate-interview-questions
     agent: interview-agent
+    priority: 2
+
+    max_retries: 2
+    timeout: 180
     depends_on:
       - filter-top-opportunities
     input:
@@ -187,8 +217,11 @@ tasks:
         - databases
         - distributed-systems
 
-  - id: create-study-plan
+  - task_key: create-study-plan
     agent: mentor-agent
+    priority: 1
+    max_retries: 2
+    timeout: 120
     depends_on:
       - build-skill-gap-report
       - generate-interview-questions
@@ -200,22 +233,25 @@ tasks:
   # STAGE 6 — APPLICATION EXECUTION
   # ============================================
 
-  - id: submit-applications
+  - task_key: submit-applications
     agent: automation-agent
+    priority: 4
+    max_retries: 1
+    timeout: 600
     depends_on:
       - generate-custom-resume
       - generate-cover-letter
-    approval_required: true
     input:
       auto_fill_forms: true
       upload_documents: true
 
-  - id: track-application-status
+  - task_key: track-application-status
     agent: tracking-agent
+    priority: 1
+    max_retries: 3
+    timeout: 120
     depends_on:
       - submit-applications
-    schedule:
-      every: 12h
     input:
       update_database: true
       notify_on_change: true
@@ -224,8 +260,11 @@ tasks:
   # STAGE 7 — REPORTING
   # ============================================
 
-  - id: generate-dashboard
+  - task_key: generate-dashboard
     agent: analytics-agent
+    priority: 1
+    max_retries: 2
+    timeout: 120
     depends_on:
       - track-application-status
     input:
@@ -236,8 +275,11 @@ tasks:
         - top_regions
         - salary_distribution
 
-  - id: notify-user
+  - task_key: notify-user
     agent: notification-agent
+    priority: 1
+    max_retries: 3
+    timeout: 60
     depends_on:
       - generate-dashboard
     input:
