@@ -2,11 +2,12 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/justinndidit/agentflow/internal/dtos"
 	"github.com/justinndidit/agentflow/internal/persistence/models"
 )
 
@@ -25,7 +26,7 @@ var taskInsertFields = []string{
 
 type TaskStore interface {
 	BulkInsertTask(context.Context, []*models.TaskRow) error
-	UpdateTask(context.Context, *models.TaskRow) error
+	UpdateTask(context.Context, uuid.UUID, *dtos.UpdateTaskDTO) error
 	GetTaskByID(context.Context, uuid.UUID) (*models.TaskRow, error)
 	ListTasksByWorkflow(context.Context, uuid.UUID) ([]*models.TaskRow, error)
 }
@@ -48,31 +49,6 @@ const taskColumns = `id, workflow_id, task_key, agent_name, status,
 	priority, not_before, attempt, max_retries, timeout,
 	started_at, finished_at, error_message, created_at, updated_at`
 
-func scanTask(row pgx.Row) (*models.TaskRow, error) {
-	var t models.TaskRow
-
-	err := row.Scan(
-		&t.ID, &t.WorkflowID, &t.TaskKey, &t.AgentName, &t.Status,
-		&t.DependsOn, &t.RemainingDeps, &t.InputTemplate,
-		&t.EngineID, &t.LeaseEpoch, &t.LeaseExpiry,
-		&t.Priority, &t.NotBefore, &t.Attempt, &t.MaxRetries, &t.Timeout,
-		&t.StartedAt, &t.FinishedAt, &t.ErrorMessage, &t.CreatedAt, &t.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &t, nil
-}
-
-// BulkInsertTask writes every task of a workflow using the COPY protocol.
-//
-// One round trip rather than one per task matters less for speed here than for
-// atomicity of intent: the caller runs this inside the same transaction as the
-// workflow insert, so a workflow can never exist with a partial task set. COPY
-// additionally avoids the 65535-parameter ceiling a multi-row INSERT would hit.
 func (p *PostgresTaskStore) BulkInsertTask(ctx context.Context, tasks []*models.TaskRow) error {
 	if len(tasks) == 0 {
 		return nil
@@ -114,52 +90,63 @@ func (p *PostgresTaskStore) BulkInsertTask(ctx context.Context, tasks []*models.
 	return nil
 }
 
-// UpdateTask writes the mutable fields of a task by id.
-//
-// This is a general-purpose update and deliberately does NOT carry a lease
-// guard. Scheduling transitions — claim, complete, fail, reap — must be
-// conditional on (engine_id, lease_epoch, status) to be safe under concurrency,
-// so they belong in their own methods rather than being expressed through here.
-func (p *PostgresTaskStore) UpdateTask(ctx context.Context, task *models.TaskRow) error {
-	stmt := `UPDATE tasks SET
-			status           = $2::task_status,
-			remaining_deps   = $3,
-			input_template   = $4::jsonb,
-			engine_id        = $5,
-			lease_epoch      = $6,
-			lease_expires_at = $7,
-			priority         = $8,
-			not_before       = COALESCE($9, not_before),
-			attempt          = $10,
-			max_retries      = $11,
-			timeout          = $12,
-			started_at       = $13,
-			finished_at      = $14,
-			error_message    = $15,
-			updated_at       = now()
-		WHERE id = $1`
+func (p *PostgresTaskStore) UpdateTask(ctx context.Context, taskID uuid.UUID, task *dtos.UpdateTaskDTO) error {
+	stmt := "UPDATE tasks SET "
 
-	tag, err := p.repo.Exec(ctx, stmt,
-		task.ID, task.Status, task.RemainingDeps, task.InputTemplate,
-		task.EngineID, task.LeaseEpoch, task.LeaseExpiry,
-		task.Priority, task.NotBefore, task.Attempt, task.MaxRetries, task.Timeout,
-		task.StartedAt, task.FinishedAt, task.ErrorMessage,
-	)
-	if err != nil {
-		return fmt.Errorf("update task %s: %w", task.ID, err)
+	args := pgx.NamedArgs{
+		"id": taskID,
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("update task %s: %w", task.ID, ErrNotFound)
+	setClauses := []string{}
+
+	if task.Status != nil {
+		setClauses = append(setClauses, "status = @taskStatus")
+		args["status"] = *task.Status
+	}
+
+	if task.Attempt != nil {
+		setClauses = append(setClauses, "attempt = @attempt")
+		args["attempt"] = *task.Attempt
+	}
+
+	if task.StartedAt != nil {
+		setClauses = append(setClauses, "started_at = @startedAt")
+		args["startedAt"] = *task.StartedAt
+	}
+	if task.DependsOn != nil {
+		setClauses = append(setClauses, "depends_on = @dependsOn")
+		args["dependsOn"] = task.DependsOn
+	}
+	if task.FinishedAt != nil {
+		setClauses = append(setClauses, "finished_at = @finishedAt")
+		args["finishedAt"] = *task.FinishedAt
+	}
+	if task.ErrorMessage != nil {
+		setClauses = append(setClauses, "error_message = @errorMessage")
+		args["errorMessage"] = *task.ErrorMessage
+	}
+	stmt += strings.Join(setClauses, ", ")
+	stmt += " WHERE id = @id"
+
+	_, err := p.repo.Query(ctx, stmt, args)
+	if err != nil {
+		return fmt.Errorf("failed to execute update query for task %s", taskID)
 	}
 	return nil
 }
 
 func (p *PostgresTaskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (*models.TaskRow, error) {
-	stmt := `SELECT ` + taskColumns + ` FROM tasks WHERE id = $1`
+	stmt := `SELECT ` + taskColumns + ` FROM tasks WHERE id = @id`
 
-	task, err := scanTask(p.repo.QueryRow(ctx, stmt, id))
+	rows, err := p.repo.Query(ctx, stmt, pgx.NamedArgs{
+		"id": id,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("get task %s: %w", id, err)
+		return nil, fmt.Errorf("failed to execute query to fetch task %s: %w", id, err)
+	}
+
+	task, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[models.TaskRow])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect one row from table:tasks for task %s: %w", id, err)
 	}
 	return task, nil
 }
@@ -167,24 +154,14 @@ func (p *PostgresTaskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (*mod
 func (p *PostgresTaskStore) ListTasksByWorkflow(ctx context.Context, workflowID uuid.UUID) ([]*models.TaskRow, error) {
 	stmt := `SELECT ` + taskColumns + ` FROM tasks WHERE workflow_id = $1 ORDER BY created_at`
 
-	rows, err := p.repo.Query(ctx, stmt, workflowID)
+	rows, err := p.repo.Query(ctx, stmt, pgx.NamedArgs{"workflow_id": workflowID})
 	if err != nil {
-		return nil, fmt.Errorf("list tasks for workflow %s: %w", workflowID, err)
+		return nil, fmt.Errorf("failed to execute query to get all tasks attached to workflow %s: %w", workflowID, err)
 	}
-	defer rows.Close()
 
-	tasks := []*models.TaskRow{}
-	for rows.Next() {
-		task, err := scanTask(rows)
-		if err != nil {
-			return nil, fmt.Errorf("list tasks for workflow %s: %w", workflowID, err)
-		}
-		tasks = append(tasks, task)
-	}
-	// rows.Err reports a failure that ended iteration early; without it a
-	// truncated result set reads as a successful short list.
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list tasks for workflow %s: %w", workflowID, err)
+	tasks, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[models.TaskRow])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect rows from table:tasks for workflow %s: %w", workflowID, err)
 	}
 	return tasks, nil
 }

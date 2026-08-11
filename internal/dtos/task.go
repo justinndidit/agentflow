@@ -36,3 +36,12 @@ func NewTaskResponse(t *state.Task) TaskResponse {
 		ErrorMessage: t.ErrorMessage,
 	}
 }
+
+type UpdateTaskDTO struct {
+	Status       *string
+	Attempt      *int
+	DependsOn    []string
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	ErrorMessage *string    `json:"error_message,omitempty"`
+}
