@@ -2,12 +2,10 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/justinndidit/agentflow/internal/persistence/models"
 )
 
@@ -36,29 +34,6 @@ const workflowColumns = `id, name, namespace, manifest, version, status,
 	COALESCE(max_tokens, 0), tokens_used,
 	default_timeout, created_at, updated_at`
 
-// scanWorkflow reads one row in the order declared by workflowColumns.
-func scanWorkflow(row pgx.Row) (*models.WorkflowRow, error) {
-	var w models.WorkflowRow
-	var timeout pgtype.Interval
-
-	err := row.Scan(
-		&w.ID, &w.WorkflowName, &w.WorkflowNameSpace, &w.Manifest, &w.Version, &w.Status,
-		&w.TaskCount, &w.TaskCompleted, &w.TaskFailed, &w.TaskCancelled,
-		&w.MaxParallelism, &w.RunningCount,
-		&w.MaxTokensPerRun, &w.TokensUsed,
-		&timeout, &w.CreatedAt, &w.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-
-	w.DefaultTimeout = intervalToDuration(timeout)
-	return &w, nil
-}
-
 func (p *PostgresWorkflowStore) CreateWorkflow(ctx context.Context, workflow *models.WorkflowRow) (*models.WorkflowRow, error) {
 	// status is cast explicitly because workflow_status is an enum; without the
 	// cast Postgres cannot infer the parameter type from a bare string.
@@ -68,25 +43,40 @@ func (p *PostgresWorkflowStore) CreateWorkflow(ctx context.Context, workflow *mo
 		max_parallelism, running_count, max_tokens, tokens_used,
 		default_timeout, created_at, updated_at
 	) VALUES (
-		$1, $2, $3, $4, $5, $6::workflow_status,
-		$7, $8, $9, $10,
-		$11, $12, $13, $14,
-		$15, $16, $17
+		@workflowID, @workflowName, @workflowNamespace, @workflowManifest, @workflowVersion, @workflowStatus, @taskTotal,
+		@taskCompleted, @taskFailed, @taskCancelled, @maxParallelism,
+		@runningCount, @maxTokens, @tokensUsed, @defaultTimeout,
+		@createdAt, @updatedAt
 	) RETURNING ` + workflowColumns
 
-	row := p.repo.QueryRow(ctx, stmt,
-		workflow.ID, workflow.WorkflowName, workflow.WorkflowNameSpace,
-		workflow.Manifest, workflow.Version, workflow.Status,
-		workflow.TaskCount, workflow.TaskCompleted, workflow.TaskFailed, workflow.TaskCancelled,
-		workflow.MaxParallelism, workflow.RunningCount,
-		workflow.MaxTokensPerRun, workflow.TokensUsed,
-		durationToInterval(workflow.DefaultTimeout),
-		workflow.CreatedAt, workflow.UpdatedAt,
-	)
+	args := pgx.NamedArgs{
+		"workflowID":        workflow.ID,
+		"workflowName":      workflow.WorkflowName,
+		"workflowNamespace": workflow.WorkflowNameSpace,
+		"workflowManifest":  workflow.Manifest,
+		"workflowVersion":   workflow.Version,
+		"workflowStatus":    workflow.Status,
+		"taskTotal":         workflow.TaskCount,
+		"taskCompleted":     workflow.TaskCompleted,
+		"taskFailed":        workflow.TaskFailed,
+		"taskCancelled":     workflow.TaskCancelled,
+		"maxParallelism":    workflow.MaxParallelism,
+		"runningCount":      workflow.RunningCount,
+		"maxTokens":         workflow.MaxTokensPerRun,
+		"tokensUsed":        workflow.TokensUsed,
+		"defaultTimeout":    workflow.DefaultTimeout,
+		"createdAt":         workflow.CreatedAt,
+		"updatedAt":         workflow.UpdatedAt,
+	}
 
-	created, err := scanWorkflow(row)
+	rows, err := p.repo.Query(ctx, stmt, args)
 	if err != nil {
-		return nil, fmt.Errorf("create workflow %s: %w", workflow.WorkflowName, err)
+		return nil, fmt.Errorf("failed to execute query to create workflow: %w", err)
+	}
+
+	created, err := pgx.CollectExactlyOneRow(rows, pgx.RowToAddrOfStructByName[models.WorkflowRow])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect from table:workflows: %w", err)
 	}
 	return created, nil
 }
@@ -98,24 +88,39 @@ func (p *PostgresWorkflowStore) CreateWorkflow(ctx context.Context, workflow *mo
 // Callers that need a specific run should use GetWorkflowByID.
 func (p *PostgresWorkflowStore) GetWorkflowByName(ctx context.Context, name string) (*models.WorkflowRow, error) {
 	stmt := `SELECT ` + workflowColumns + `
-		FROM workflows WHERE name = $1
+		FROM workflows WHERE name = @workflowName
 		ORDER BY created_at DESC
 		LIMIT 1`
 
-	workflow, err := scanWorkflow(p.repo.QueryRow(ctx, stmt, name))
+	rows, err := p.repo.Query(ctx, stmt, pgx.NamedArgs{
+		"workflowName": name,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("get workflow by name %s: %w", name, err)
+		return nil, fmt.Errorf("failed to execute query to get workflow with name %s: %w", name, err)
+	}
+
+	workflow, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[models.WorkflowRow])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect workflow from table:workflows for workflow %s: %w", name, err)
 	}
 	return workflow, nil
 }
 
 func (p *PostgresWorkflowStore) GetWorkflowByID(ctx context.Context, id uuid.UUID) (*models.WorkflowRow, error) {
-	stmt := `SELECT ` + workflowColumns + ` FROM workflows WHERE id = $1`
+	stmt := `SELECT ` + workflowColumns + ` FROM workflows WHERE id = @workflowID`
 
-	workflow, err := scanWorkflow(p.repo.QueryRow(ctx, stmt, id))
+	rows, err := p.repo.Query(ctx, stmt, pgx.NamedArgs{
+		"workflowID": id,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("get workflow by id %s: %w", id, err)
+		return nil, fmt.Errorf("failed to execute query to get workflow %s: %w", id, err)
 	}
+
+	workflow, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[models.WorkflowRow])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect workflow from table:workflows for workflow %s: %w", id, err)
+	}
+
 	return workflow, nil
 }
 
