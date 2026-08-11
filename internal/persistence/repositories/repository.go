@@ -13,6 +13,7 @@ type Repository interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
+	CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error)
 }
 
 type PostgresRepository struct {
@@ -69,6 +70,13 @@ func (p *PostgresRepository) QueryRow(ctx context.Context, stmt string, args ...
 	return p.pool.QueryRow(ctx, stmt, args...)
 }
 
+func (p *PostgresRepository) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	if p.tx != nil {
+		return p.tx.CopyFrom(ctx, tableName, columnNames, rowSrc)
+	}
+	return p.pool.CopyFrom(ctx, tableName, columnNames, rowSrc)
+}
+
 func NewTxManager(db *pgxpool.Pool, logger *zerolog.Logger) *TxManager {
 	return &TxManager{
 		db:     db,
@@ -100,6 +108,7 @@ func (t *TxManager) WithTransaction(ctx context.Context, fn func(ctx context.Con
 	// after it — and a successful rollback returns nil, turning a failed
 	// transaction into a silent success.
 	if err = fn(ctx, stores); err != nil {
+		t.logger.Error().Err(err).Str("func", "WithTransaction").Msg("failed to execute transaction")
 		if rbErr := tx.Rollback(ctx); rbErr != nil {
 			t.logger.Error().Err(rbErr).Str("func", "WithTransaction").Msg("failed to rollback transaction")
 		}
