@@ -30,8 +30,8 @@ func NewPostgresWorkflowStore(repo Repository) *PostgresWorkflowStore {
 // list and the scan order cannot drift apart.
 const workflowColumns = `id, name, namespace, manifest, version, status,
 	task_total, task_completed, task_failed, task_cancelled,
-	COALESCE(max_parallelism, 0), running_count,
-	COALESCE(max_tokens, 0), tokens_used,
+	max_parallelism, running_count,
+	max_tokens, tokens_used,
 	default_timeout, created_at, updated_at`
 
 func (p *PostgresWorkflowStore) CreateWorkflow(ctx context.Context, workflow *models.WorkflowRow) (*models.WorkflowRow, error) {
