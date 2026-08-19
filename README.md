@@ -150,21 +150,16 @@ go mod tidy
 docker compose -f docker-compose.dev.yml up -d
 ```
 
-Migrations are applied automatically on boot. Run once to create the schema —
-this will fail at submit, because `tasks.agent_name` is a foreign key to
-`agents(name)` and no agents exist yet:
+Migrations are applied automatically on boot. On a fresh database, pass `-seed`
+the first time — `tasks.agent_name` is a foreign key to `agents(name)`, so a
+manifest cannot be submitted until the agents it names exist:
 
 ```bash
-go run ./cmd/agentflow
+go run ./cmd/agentflow -seed
 ```
 
-Seed the agents referenced by the example manifest:
-
-```bash
-docker exec -i agentflow_db psql -U postgres -d agentflow < scripts/seed_agents.sql
-```
-
-Then submit:
+The seed runs after the migrations and is idempotent, so `-seed` is harmless to
+repeat. Later runs can leave it off:
 
 ```bash
 go run ./cmd/agentflow
@@ -219,7 +214,7 @@ internal/
         task.go              — task state machine and transition rules
         workflow.go          — workflow state
     persistence/
-        database/            — connection pool, migrations
+        database/            — connection pool, migrations, dev seed
         models/              — database row types
         repositories/        — stores, transaction manager
     dtos/                    — API response types
@@ -227,7 +222,6 @@ internal/
     config/
 
 migrations/                  — schema, applied by golang-migrate
-scripts/seed_agents.sql      — development seed data
 docs/                        — architecture
 pkg/                         — logger, set, json helpers
 ```

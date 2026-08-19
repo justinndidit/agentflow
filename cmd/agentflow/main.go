@@ -20,7 +20,9 @@ func main() {
 
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 	var manifestFile string
+	var seedDevData bool
 	flag.StringVar(&manifestFile, "manifest", "example-workflow.yml", "workflow manifest location")
+	flag.BoolVar(&seedDevData, "seed", false, "insert the development agents the example manifest refers to")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig(&logger)
@@ -54,6 +56,17 @@ func main() {
 	if err != nil {
 		logger.Error().Err(err).Str("func", "main").Msg("failed to migrate to database")
 		return
+	}
+
+	// Must come after Migrate and before SubmitManifest: tasks.agent_name is a
+	// foreign key to agents(name), so submitting a manifest against an unseeded
+	// database fails the whole bulk insert.
+	if seedDevData {
+		err = database.SeedDevAgents(startContext, db.Pool, &logger)
+		if err != nil {
+			logger.Error().Err(err).Str("func", "main").Msg("failed to seed development agents")
+			return
+		}
 	}
 
 	txManager := repositories.NewTxManager(db.Pool, &logger)
