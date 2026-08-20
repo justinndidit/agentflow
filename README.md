@@ -20,6 +20,9 @@ What works today:
   transaction
 - **Claim** — nodes take ready work atomically under `FOR UPDATE SKIP LOCKED`,
   bounded by their own free capacity
+- **Resolve** — `{{ tasks.<key>.output... }}` references are substituted at
+  dispatch from the outputs the task's dependencies committed, preserving the
+  referenced type
 - **Execute** — node-local bounded concurrency, with each attempt capped by the
   shorter of the task's timeout and its lease
 - **Commit** — results, dependent decrements and workflow counters in one
@@ -37,8 +40,8 @@ mid-workflow: the work it held is reclaimed and rerun, the workflow completes,
 and the dead node's late writes are fenced out. That test lives in
 [`cmd/agentflow/kill_integration_test.go`](cmd/agentflow/kill_integration_test.go).
 
-Not built yet: the Docker runtime, template resolution at dispatch, blob storage
-for large outputs, and observability.
+Not built yet: the Docker runtime, blob storage for large outputs, and
+observability.
 
 See [docs/agentflow_architecture.md](docs/agentflow_architecture.md) for the full
 design, and [docs/execution_path_plan.md](docs/execution_path_plan.md) for how

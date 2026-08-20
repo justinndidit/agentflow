@@ -25,6 +25,7 @@ type Pool struct {
 	capacity  int
 	runtime   runtime.Runtime
 	committer *Committer
+	resolver  InputResolver
 	logger    *zerolog.Logger
 	leaseTTL  time.Duration
 
@@ -38,16 +39,21 @@ func NewPool(
 	capacity int,
 	rt runtime.Runtime,
 	committer *Committer,
+	resolver InputResolver,
 	leaseTTL time.Duration,
 	logger *zerolog.Logger,
 ) *Pool {
 	if capacity < 1 {
 		capacity = 1
 	}
+	if resolver == nil {
+		resolver = StaticResolver{}
+	}
 	return &Pool{
 		capacity:  capacity,
 		runtime:   rt,
 		committer: committer,
+		resolver:  resolver,
 		leaseTTL:  leaseTTL,
 		logger:    logger,
 	}
@@ -147,7 +153,24 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 	defer cancel()
 
 	started := time.Now()
-	response, err := p.runtime.Execute(taskCtx, runtime.Request{
+
+	// Resolution happens here rather than at claim time so one task's bad
+	// upstream data fails that task alone, instead of aborting a whole claimed
+	// batch before any of it starts.
+	input, err := p.resolver.Resolve(taskCtx, task)
+	if err != nil {
+		// A task failure, not an engine error: an upstream agent produced a
+		// shape this manifest did not expect. It is recorded with the template
+		// as the resolved input, since that is what the attempt actually had.
+		p.commit(ctx, task, fence, Outcome{
+			Duration:      time.Since(started),
+			ResolvedInput: task.InputTemplate,
+			Err:           err,
+		})
+		return
+	}
+
+	response, runErr := p.runtime.Execute(taskCtx, runtime.Request{
 		TaskID:     task.ID,
 		WorkflowID: task.WorkflowID,
 		TaskKey:    task.TaskKey,
@@ -156,20 +179,34 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 		// Stable across attempts by design, so a worker can recognise work it
 		// already did rather than repeat its side effects.
 		IdempotencyKey: task.ID.String(),
-		Input:          task.InputTemplate,
+		Input:          input,
 	})
 
 	outcome := Outcome{
-		Duration:      time.Since(started),
-		ResolvedInput: task.InputTemplate,
+		Duration: time.Since(started),
+		// What the worker was actually given, which is the only useful record
+		// when a failed attempt has to be explained after the fact.
+		ResolvedInput: input,
 	}
-	if err != nil {
-		outcome.Err = err
+	if runErr != nil {
+		outcome.Err = runErr
 	} else if response != nil {
 		outcome.Output = response.Output
 		outcome.TokensUsed = response.TokensUsed
 		outcome.CostMicros = response.CostMicros
 	}
+
+	p.commit(ctx, task, fence, outcome)
+}
+
+// commit records an outcome, treating a superseded lease as expected rather
+// than as a failure.
+func (p *Pool) commit(
+	ctx context.Context,
+	task *models.TaskRow,
+	fence repositories.Fence,
+	outcome Outcome,
+) {
 
 	// The commit must not inherit the task's deadline: a task that ran right up
 	// to its timeout would then be unable to record that it did.
