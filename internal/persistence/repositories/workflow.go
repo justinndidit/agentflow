@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -101,6 +102,11 @@ func (p *PostgresWorkflowStore) GetWorkflowByName(ctx context.Context, name stri
 
 	workflow, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[models.WorkflowRow])
 	if err != nil {
+		// Translate at the boundary so callers can test with errors.Is(err,
+		// ErrNotFound) instead of importing pgx to recognise absence.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("get workflow %s: %w", name, ErrNotFound)
+		}
 		return nil, fmt.Errorf("failed to collect workflow from table:workflows for workflow %s: %w", name, err)
 	}
 	return workflow, nil
@@ -118,6 +124,9 @@ func (p *PostgresWorkflowStore) GetWorkflowByID(ctx context.Context, id uuid.UUI
 
 	workflow, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[models.WorkflowRow])
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("get workflow %s: %w", id, ErrNotFound)
+		}
 		return nil, fmt.Errorf("failed to collect workflow from table:workflows for workflow %s: %w", id, err)
 	}
 
