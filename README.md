@@ -9,9 +9,9 @@ transaction against it, so engine nodes stay stateless and interchangeable.
 
 ## Status
 
-Under development. Workflows run end to end across multiple nodes, but the only
-worker available is a placeholder that echoes its input — no containers are
-executed yet, so Agentflow cannot run real agents.
+Under development. Workflows run end to end across multiple nodes, executing
+agents as containers. What is missing is the surrounding machinery — an agent
+registry beyond a seed table, blob storage for large outputs, and observability.
 
 What works today:
 
@@ -23,8 +23,10 @@ What works today:
 - **Resolve** — `{{ tasks.<key>.output... }}` references are substituted at
   dispatch from the outputs the task's dependencies committed, preserving the
   referenced type
-- **Execute** — node-local bounded concurrency, with each attempt capped by the
-  shorter of the task's timeout and its lease
+- **Execute** — each task runs as a container: resolved JSON on stdin, JSON on
+  stdout, with memory, CPU and PID limits, a read-only root, all capabilities
+  dropped and no Docker socket. Node-local bounded concurrency, and every
+  attempt capped by the shorter of the task's timeout and its lease
 - **Commit** — results, dependent decrements and workflow counters in one
   transaction, fenced by `lease_epoch` so a superseded node cannot overwrite a
   newer result
@@ -40,8 +42,13 @@ mid-workflow: the work it held is reclaimed and rerun, the workflow completes,
 and the dead node's late writes are fenced out. That test lives in
 [`cmd/agentflow/kill_integration_test.go`](cmd/agentflow/kill_integration_test.go).
 
-Not built yet: the Docker runtime, blob storage for large outputs, and
-observability.
+The seeded development agents point at placeholder images that are not
+published anywhere, so the default runtime is `echo`, which returns a task's
+input as its output. Set `AGENTFLOW__ENGINE__RUNTIME=docker` and register agents
+against real images to run containers —
+[`examples/echo-agent`](examples/echo-agent) is a working reference.
+
+Not built yet: blob storage for large outputs, and observability.
 
 See [docs/agentflow_architecture.md](docs/agentflow_architecture.md) for the full
 design, and [docs/execution_path_plan.md](docs/execution_path_plan.md) for how

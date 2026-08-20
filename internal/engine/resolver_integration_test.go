@@ -253,6 +253,7 @@ func TestPool_ResolutionFailureFailsTheTask(t *testing.T) {
 	pool := engine.NewPool(2, executed,
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.NewTemplateResolver(f.stores.TaskResultStore),
+		engine.NewCachedAgentImages(f.stores.AgentStore),
 		testLeaseTTL, nopLogger())
 
 	if err := pool.Handle(ctx, []*models.TaskRow{rank}); err != nil {
@@ -293,6 +294,7 @@ func TestPool_RecordsTheResolvedInput(t *testing.T) {
 	pool := engine.NewPool(2, runtime.NewEcho(0),
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.NewTemplateResolver(f.stores.TaskResultStore),
+		engine.NewCachedAgentImages(f.stores.AgentStore),
 		testLeaseTTL, nopLogger())
 
 	if err := pool.Handle(ctx, []*models.TaskRow{rank}); err != nil {

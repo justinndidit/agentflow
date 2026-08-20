@@ -98,6 +98,23 @@ type Engine struct {
 	// Deliberately coarse relative to the heartbeat: reaping early is worse
 	// than reaping late, because it duplicates work that is still running.
 	ReapInterval int `koanf:"reap_interval" validate:"required,gt=0"`
+
+	// Runtime selects how tasks are executed. "docker" runs the agent's
+	// container image; "echo" runs no container and returns the input as the
+	// output, which is what the scheduling tests exercise.
+	Runtime string `koanf:"runtime" validate:"required,oneof=docker echo"`
+
+	// TaskMemoryMB caps a single container's memory. A node runs several at
+	// once, so the ceiling that matters is the host's rather than one task's.
+	TaskMemoryMB int64 `koanf:"task_memory_mb" validate:"required,gt=0"`
+
+	// TaskCPUs caps a single container's CPU, in whole cores. Fractions are
+	// allowed: 0.5 is half a core.
+	TaskCPUs float64 `koanf:"task_cpus" validate:"required,gt=0"`
+
+	// TaskNetwork is the Docker network mode for a task container. "none"
+	// isolates it completely; agents that call a model provider need "bridge".
+	TaskNetwork string `koanf:"task_network" validate:"required"`
 }
 
 type Migrations struct {
@@ -141,6 +158,13 @@ func defaults() Config {
 			LeaseTTL:     60,
 			PollInterval: 2,
 			ReapInterval: 15,
+			// Echo by default: the seeded development agents point at
+			// placeholder images that are not published anywhere, so docker
+			// would fail every task on a fresh checkout.
+			Runtime:      "echo",
+			TaskMemoryMB: 512,
+			TaskCPUs:     1,
+			TaskNetwork:  "bridge",
 		},
 	}
 }
