@@ -1,87 +1,31 @@
 # Agentflow
 
-Agentflow is a distributed execution engine for AI workers.
+Agentflow is a distributed execution engine for AI workers. You bring the worker
+as a container; Agentflow handles scheduling, dependency resolution, leasing,
+retries, and failure recovery across a fleet of machines.
 
-Think of it as Kubernetes for AI agents — you bring the worker, Agentflow handles
-scheduling, dependency resolution, leasing, retries, and failure recovery across
-a fleet of machines.
-
-> "The valuable layer is not discovering agents. It is running them safely,
-> composing them reliably, and scaling them predictably."
-
----
-
-## The Problem
-
-Teams building AI systems hit the same infrastructure problems repeatedly:
-
-- No standard deployment unit for AI workers
-- Brittle glue code stitching agents together
-- No reliable retry, cancellation, or failure semantics
-- Poor observability into what agents are actually doing
-- Tight coupling to Python frameworks and specific SDK ecosystems
-- No governance — cost controls, audit trails, access policies
-
-Agentflow solves the infrastructure layer so you can focus on worker logic.
-
----
+Postgres is the single source of truth. Every scheduling decision is a
+transaction against it, so engine nodes stay stateless and interchangeable.
 
 ## Status
 
-Agentflow is under active development and **not yet usable for running
-workloads**. The submit path works end to end; the execution path does not exist
-yet.
+Early development. The submit path works end to end — a YAML manifest is parsed,
+validated, and persisted as a runnable task graph. The execution path is
+designed and has schema behind it, but nothing claims or runs tasks yet.
 
-**Working today**
+What works today:
 
-- [x] YAML manifest parsing with schema validation
-- [x] DAG validation at submit time — cycle detection, unknown dependencies
-- [x] Template reference validation — a task may only read the output of a task
-      it declares a dependency on
-- [x] Postgres schema with migrations applied on boot
-- [x] Workflow and task persistence, transactionally
-- [x] Submit a manifest and have it land in the database as a runnable graph
+- YAML manifest parsing with schema validation
+- DAG validation at submit time — cycle detection, unknown dependencies
+- Template reference validation — a task may only read the output of a task it
+  declares a dependency on
+- Postgres schema with migrations applied on boot
+- Transactional workflow and task persistence
 
-**Designed, schema in place, not yet implemented**
+See [docs/agentflow_architecture.md](docs/agentflow_architecture.md) for the full
+design, including lease fencing and failure semantics.
 
-- [ ] Dispatcher — claim ready tasks with `FOR UPDATE SKIP LOCKED`
-- [ ] Committer — record results, decrement dependents, update counters
-- [ ] Reaper — reclaim tasks from dead engines and expired leases
-- [ ] Lease fencing via `lease_epoch` (columns exist, no loop uses them yet)
-- [ ] Engine registration and heartbeating
-
-**Not started**
-
-- [ ] Docker agent runtime — the worker contract is specified, nothing executes
-- [ ] Template resolution at dispatch
-- [ ] Blob storage for large outputs
-- [ ] Observability — traces, cost tracking
-
-The v0.1 in-memory wave executor has been removed. It could not survive
-distribution; see [the architecture doc](docs/agentflow_architecture.md) for why.
-
----
-
-## Architecture
-
-**Postgres is the single source of truth.** Every scheduling decision is a
-transaction against it. Engine nodes are stateless and interchangeable — any node
-can run any ready task, and losing a node loses no work.
-
-There is no coordinator and no leader election. Each task row carries a
-`remaining_deps` counter; a task is runnable when that counter reaches zero. When
-a task completes, the same transaction that records its result decrements its
-dependents. Readiness propagates through data rather than through a scheduler.
-
-The DAG is a **validation artifact**, not an execution plan — checked once at
-submit time for cycles, then discarded.
-
-Full design, including lease fencing, failure semantics, and the trade-offs
-behind them: **[docs/agentflow_architecture.md](docs/agentflow_architecture.md)**
-
----
-
-## Core Concepts
+## Concepts
 
 **Agent** — an AI worker packaged as a container image with a typed input/output
 contract. Language agnostic.
@@ -91,12 +35,20 @@ contract. Language agnostic.
 `pending` and a backoff window.
 
 **Workflow** — a DAG of tasks, submitted as a YAML manifest. Independent branches
-run in parallel automatically.
+run in parallel.
 
 **Engine** — a node that claims and executes tasks. Engines register themselves,
 heartbeat, and hold time-bounded leases on the work they claim.
 
----
+## How Scheduling Works
+
+There is no coordinator and no leader election. Each task row carries a
+`remaining_deps` counter; a task is runnable when that counter reaches zero. When
+a task completes, the same transaction that records its result decrements its
+dependents. Readiness propagates through data rather than through a scheduler.
+
+The DAG is a validation artifact, not an execution plan — checked once at submit
+time for cycles, then discarded.
 
 ## Manifest Format
 
@@ -135,8 +87,6 @@ Template expressions are stored unresolved and resolved when the task is
 dispatched, since upstream output does not exist at submit time. Referencing a
 task you do not depend on is rejected at submit.
 
----
-
 ## Getting Started
 
 Requires Go 1.25+ and Docker.
@@ -146,31 +96,34 @@ git clone https://github.com/justinndidit/agentflow
 cd agentflow
 go mod tidy
 
+cp .env.sample .env
+
 # start Postgres
 docker compose -f docker-compose.dev.yml up -d
 ```
 
+Configuration comes from built-in defaults, then `.env`, then real environment
+variables, each layer overriding the one before. The defaults match
+`docker-compose.dev.yml`, so `.env` is optional locally and a deployment can
+override a single value without shipping a file:
+
+```bash
+AGENTFLOW__DATABASE__HOST=db.internal go run ./cmd/agentflow
+```
+
+Application variables are namespaced `AGENTFLOW__<SECTION>__<KEY>`; the double
+underscore separates the section from the key, since key names contain single
+underscores of their own. `.env.sample` lists every setting with its default.
+
 Migrations are applied automatically on boot. On a fresh database, pass `-seed`
 the first time — `tasks.agent_name` is a foreign key to `agents(name)`, so a
-manifest cannot be submitted until the agents it names exist:
+manifest cannot be submitted until the agents it names exist. The seed runs after
+the migrations and is idempotent, so repeating it is harmless.
 
 ```bash
-go run ./cmd/agentflow -seed
-```
-
-The seed runs after the migrations and is idempotent, so `-seed` is harmless to
-repeat. Later runs can leave it off:
-
-```bash
-go run ./cmd/agentflow
-```
-
-```
-INF starting db migration... func=Migrate
-INF no schema change func=Migrate
-INF db migrated successfully func=Migrate
-INF submitManifest request func=SubmitManifest
-workflow submitted successfully!
+go run ./cmd/agentflow -seed     # first run
+go run ./cmd/agentflow           # afterwards
+go run ./cmd/agentflow -manifest path/to/workflow.yml
 ```
 
 Inspect what landed:
@@ -183,71 +136,25 @@ docker exec agentflow_db psql -U postgres -d agentflow -c \
 ```
 
 Tasks with `remaining_deps = 0` are the ones a dispatcher would claim first.
-Nothing claims them yet.
-
 Each submission creates a new workflow run, so submitting the same manifest twice
 gives you two independent graphs — hence the scoping by workflow above.
-
-Use a different manifest with `-manifest`:
-
-```bash
-go run ./cmd/agentflow -manifest path/to/workflow.yml
-```
-
----
 
 ## Project Layout
 
 ```
-cmd/agentflow/
-    main.go                  — entry point: config, migrate, submit
-
+cmd/agentflow/         entry point: config, migrate, submit
 internal/
-    manifest/
-        parser.go            — YAML schema and parsing
-        validate.go          — template reference validation
-    engine/
-        dag.go               — cycle detection at submit time
-        manifest.go          — submit pipeline
-        pool.go              — node-local concurrency (being rewritten)
-    state/
-        task.go              — task state machine and transition rules
-        workflow.go          — workflow state
-    persistence/
-        database/            — connection pool, migrations, dev seed
-        models/              — database row types
-        repositories/        — stores, transaction manager
-    dtos/                    — API response types
-    runtime/                 — Docker agent runtime (not implemented)
-    config/
-
-migrations/                  — schema, applied by golang-migrate
-docs/                        — architecture
-pkg/                         — logger, set, json helpers
+  manifest/            YAML schema, parsing, template validation
+  engine/              cycle detection, submit pipeline
+  state/               task and workflow state machines
+  persistence/         connection pool, migrations, models, repositories
+  dtos/                API response types
+  runtime/             Docker agent runtime (not implemented)
+  config/
+migrations/            schema, applied by golang-migrate
+docs/                  architecture
+pkg/                   logger, set, json helpers
 ```
-
----
-
-## Design Principles
-
-**Determinism at the orchestration layer** — AI workers are probabilistic;
-execution control is not. The engine behaves predictably.
-
-**Reliability over intelligence** — Agentflow does not make AI workers smarter.
-It makes them operationally reliable.
-
-**Exactly-once state, at-least-once execution** — Postgres gives transactional
-certainty about state. It cannot give it about an agent's side effects, so
-workers are required to be idempotent under a supplied key. The guarantee is
-stated where it can actually be kept.
-
-**Language agnostic** — workers are containers. The engine does not care what is
-inside.
-
-**Infrastructure first** — registry, marketplace, and discovery are emergent
-layers. The execution engine is the product.
-
----
 
 ## Built With
 
@@ -255,10 +162,6 @@ layers. The execution engine is the product.
 - PostgreSQL — source of truth, task queue, coordination
 - [pgx](https://github.com/jackc/pgx) — Postgres driver
 - [golang-migrate](https://github.com/golang-migrate/migrate) — schema migrations
-- Docker — worker sandboxing (planned)
-- OpenTelemetry — distributed tracing (planned)
-
----
 
 ## License
 

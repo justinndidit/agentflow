@@ -27,7 +27,7 @@ type WorkflowDefinition struct {
 	DefaultWorkerCount int               `yaml:"workers" validate:"required"`
 	DefaultTimeout     string            `yaml:"timeout" validate:"required"`
 	MaxTokensPerRun    int64             `yaml:"max_tokens" validate:"required"`
-	Tasks              []*TaskDefinition `yaml:"tasks" validate:"required"`
+	Tasks              []*TaskDefinition `yaml:"tasks" validate:"required,dive"`
 	Version            int               `yaml:"workflow_version"`
 }
 
@@ -43,10 +43,10 @@ type TaskDefinition struct {
 	TimeoutInSeconds int64      `yaml:"timeout" validate:"required"`
 }
 
+// Parse reads a manifest from disk and validates it. The raw bytes are
+// returned alongside the decoded workflow because the submit path stores the
+// original definition verbatim.
 func Parse(fileLocation string) (*WorkflowDefinition, []byte, error) {
-	validate := validator.New()
-	seen := map[string]bool{}
-
 	filePath := fileLocation
 	//check that the current passed file location is not absolute before trying to build the directory
 	if !filepath.IsAbs(fileLocation) {
@@ -56,38 +56,60 @@ func Parse(fileLocation string) (*WorkflowDefinition, []byte, error) {
 		}
 		filePath = filepath.Join(wd, fileLocation)
 	}
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	workflow, err := ParseBytes(data)
+	if err != nil {
+		// data is returned even on failure so a caller can report the input it
+		// rejected.
+		return nil, data, err
+	}
+
+	return workflow, data, nil
+}
+
+// ParseBytes decodes and validates a manifest that has already been read.
+//
+// Every rule that makes a manifest well formed lives here rather than in Parse,
+// so validation is exercisable without touching the filesystem. The rules run in
+// widening order: schema, then task keys, then edges between them, because each
+// later check assumes the earlier one held.
+func ParseBytes(data []byte) (*WorkflowDefinition, error) {
 	var workflow WorkflowDefinition
-	if err = yaml.Unmarshal(data, &workflow); err != nil {
-		return nil, data, err
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		return nil, err
 	}
 
-	if err = validate.Struct(workflow); err != nil {
-		return nil, data, err
+	if err := validator.New().Struct(workflow); err != nil {
+		return nil, err
 	}
 
+	// seen doubles as the set of known task keys for the two checks below.
+	seen := map[string]bool{}
 	for _, task := range workflow.Tasks {
 		if seen[task.TaskKey] {
-			return nil, data, fmt.Errorf("duplicate task id: %s", task.TaskKey)
+			return nil, fmt.Errorf("duplicate task id: %s", task.TaskKey)
 		}
 		seen[task.TaskKey] = true
 	}
 
+	// Deferred to its own loop: a task may legally depend on one declared later
+	// in the file, so every key has to be collected before any edge is resolved.
 	for _, task := range workflow.Tasks {
 		for _, dependency := range task.DependsOn {
 			if !seen[dependency] {
-				return nil, data, fmt.Errorf("task %s depends on unknown task with task key %s", task.TaskKey, dependency)
+				return nil, fmt.Errorf("task %s depends on unknown task with task key %s", task.TaskKey, dependency)
 			}
 		}
 	}
 
-	if err = validateTemplateReferences(workflow.Tasks, seen); err != nil {
-		return nil, data, err
+	if err := validateTemplateReferences(workflow.Tasks, seen); err != nil {
+		return nil, err
 	}
 
-	return &workflow, data, nil
+	return &workflow, nil
 }
