@@ -25,7 +25,11 @@ func engineStore(pool *pgxpool.Pool) repositories.EngineStore {
 // A one-second heartbeat keeps the loop tests quick; production defaults are in
 // config.defaults.
 func fastEngineConfig() *config.Engine {
-	return &config.Engine{Capacity: 4, HeartbeatInterval: 1, LeaseTTL: 60}
+	return fastEngineConfigWithCapacity(4)
+}
+
+func fastEngineConfigWithCapacity(capacity int) *config.Engine {
+	return &config.Engine{Capacity: capacity, HeartbeatInterval: 1, LeaseTTL: 60}
 }
 
 func TestRegistrar_RegistersOnBoot(t *testing.T) {
