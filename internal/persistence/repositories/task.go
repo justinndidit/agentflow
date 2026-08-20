@@ -36,6 +36,7 @@ type TaskStore interface {
 	CancelDependents(context.Context, uuid.UUID, string) (int, error)
 	RescheduleAfter(context.Context, uuid.UUID, time.Duration) error
 	Notify(context.Context, string, string) error
+	ReclaimExpired(context.Context, time.Duration, time.Duration, int) ([]Reclaimed, error)
 }
 
 type PostgresTaskStore struct {
