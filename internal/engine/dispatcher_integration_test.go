@@ -28,15 +28,27 @@ type collector struct {
 	mu    sync.Mutex
 	tasks []*models.TaskRow
 	err   error
+
+	// delay throttles the handler. Handle is called synchronously from the
+	// claim loop, so a delay here bounds how fast one dispatcher can drain a
+	// queue — which is what keeps a two-node test from being decided by
+	// goroutine scheduling.
+	delay time.Duration
 }
 
 func (c *collector) Handle(_ context.Context, tasks []*models.TaskRow) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.err != nil {
+		c.mu.Unlock()
 		return c.err
 	}
 	c.tasks = append(c.tasks, tasks...)
+	delay := c.delay
+	c.mu.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	return nil
 }
 
@@ -335,7 +347,11 @@ func TestDispatcher_TwoNodesSplitTheQueue(t *testing.T) {
 			t.Fatalf("failed to register engine: %v", err)
 		}
 
-		handlers[i] = &collector{}
+		// Throttled so neither node can drain the whole queue before the other
+		// has started; without it this test is decided by which goroutine the
+		// scheduler runs first, and the no-double-handling assertion below
+		// becomes vacuous whenever one node wins the race.
+		handlers[i] = &collector{delay: 15 * time.Millisecond}
 		dispatcher := engine.NewDispatcher(
 			taskStore(pool),
 			registered.ID,
@@ -348,13 +364,13 @@ func TestDispatcher_TwoNodesSplitTheQueue(t *testing.T) {
 		go func() { _ = dispatcher.Run(runCtx) }()
 	}
 
-	deadline := time.After(15 * time.Second)
+	deadline := time.After(30 * time.Second)
 	for handlers[0].count()+handlers[1].count() < taskCount {
 		select {
 		case <-deadline:
 			t.Fatalf("handled %d of %d tasks before timing out",
 				handlers[0].count()+handlers[1].count(), taskCount)
-		case <-time.After(20 * time.Millisecond):
+		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	cancel()
@@ -374,7 +390,10 @@ func TestDispatcher_TwoNodesSplitTheQueue(t *testing.T) {
 		t.Errorf("%d distinct tasks handled, want %d", len(seen), taskCount)
 	}
 
-	// Both nodes actually participated, or this proves nothing about splitting.
+	// Both nodes actually participated. Without this the no-double-handling
+	// assertion above would pass trivially whenever one node happened to drain
+	// the queue alone, so this is what keeps the test honest rather than a
+	// fairness requirement of the scheduler.
 	if handlers[0].count() == 0 || handlers[1].count() == 0 {
 		t.Errorf("one node did all the work: %d and %d",
 			handlers[0].count(), handlers[1].count())

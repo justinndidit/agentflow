@@ -59,6 +59,11 @@ type Dispatcher struct {
 	leaseTTL     time.Duration
 	batchSize    int
 	pollInterval time.Duration
+
+	// wake is the fast path. The poll interval is the floor that covers a
+	// missed or undelivered notification, so this is an optimisation and never
+	// a correctness requirement.
+	wake <-chan struct{}
 }
 
 type DispatcherOption func(*Dispatcher)
@@ -67,6 +72,13 @@ type DispatcherOption func(*Dispatcher)
 // wait two seconds per assertion.
 func WithPollInterval(interval time.Duration) DispatcherOption {
 	return func(d *Dispatcher) { d.pollInterval = interval }
+}
+
+// WithWakeup supplies a channel that triggers a claim pass immediately, rather
+// than waiting out the poll interval. The committer notifies whenever a task it
+// finished unblocked another.
+func WithWakeup(wake <-chan struct{}) DispatcherOption {
+	return func(d *Dispatcher) { d.wake = wake }
 }
 
 // WithBatchSize caps how many tasks one claim asks for, independently of
@@ -128,27 +140,30 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			d.logger.Info().Str("func", "Run").Msg("dispatcher stopped")
 			return nil
-
 		case <-ticker.C:
-			for {
-				claimed, err := d.claimOnce(ctx)
-				if err != nil {
-					// Logged and retried on the next tick. A database blip
-					// should not stop a node claiming forever.
-					d.logger.Error().Err(err).
-						Str("func", "Run").
-						Str("engine_id", d.engineID.String()).
-						Msg("claim failed, retrying next tick")
-					break
-				}
-				// Short read means the ready queue is drained; wait for the
-				// next tick rather than spinning on an empty table.
-				if claimed < d.claimLimit() || claimed == 0 {
-					break
-				}
-				if ctx.Err() != nil {
-					break
-				}
+		case <-d.wake:
+		}
+
+		// Keep claiming while a pass comes back full: a node with free capacity
+		// and a full queue should not wait out an interval between batches.
+		for {
+			claimed, err := d.claimOnce(ctx)
+			if err != nil {
+				// Logged and retried on the next tick. A database blip should
+				// not stop a node claiming forever.
+				d.logger.Error().Err(err).
+					Str("func", "Run").
+					Str("engine_id", d.engineID.String()).
+					Msg("claim failed, retrying next tick")
+				break
+			}
+			// A short read means the ready queue is drained; wait for the next
+			// tick rather than spinning on an empty table.
+			if claimed == 0 || claimed < d.claimLimit() {
+				break
+			}
+			if ctx.Err() != nil {
+				break
 			}
 		}
 	}

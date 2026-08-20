@@ -12,7 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	validator "github.com/go-playground/validator/v10"
@@ -128,6 +131,25 @@ func defaults() Config {
 			LeaseTTL: 60,
 		},
 	}
+}
+
+// DSN renders the connection string for this database.
+//
+// It lives on the config rather than in the database package because more than
+// one consumer needs it: the pool routes transactional work through it, and the
+// LISTEN connection is opened directly from it, deliberately bypassing any
+// pooler. Transaction-mode pooling silently breaks LISTEN, so those two paths
+// must not share a connection source.
+func (d *Database) DSN() string {
+	hostPort := net.JoinHostPort(d.Host, strconv.Itoa(d.Port))
+
+	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s",
+		url.QueryEscape(d.User),
+		url.QueryEscape(d.Password),
+		hostPort,
+		d.Name,
+		d.SSLMode,
+	)
 }
 
 // Options controls where configuration is read from. The zero value loads

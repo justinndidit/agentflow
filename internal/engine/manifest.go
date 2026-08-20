@@ -71,6 +71,13 @@ func (p *manifestProcessor) SubmitManifest(ctx context.Context, manifestFileLoca
 			p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("failed to bulk insert tasks")
 			return err
 		}
+
+		// Delivered on commit, so nodes are woken only once the graph they are
+		// being told about actually exists.
+		if err := stores.TaskStore.Notify(ctx, ReadyChannel, workflowDB.ID.String()); err != nil {
+			p.logger.Error().Err(err).Str("func", "SubmitManifest").Msg("failed to notify")
+			return err
+		}
 		return nil
 	})
 

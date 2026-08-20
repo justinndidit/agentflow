@@ -5,9 +5,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
-	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/justinndidit/agentflow/internal/config"
@@ -55,17 +52,7 @@ func (d *PostgresDatabase) Close(ctx context.Context) error {
 
 func initializeDB(ctx context.Context, cfg *config.Database) (*pgxpool.Pool, error) {
 
-	hostPort := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	encodePassword := url.QueryEscape(cfg.Password)
-	dsn := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s",
-		cfg.User,
-		encodePassword,
-		hostPort,
-		cfg.Name,
-		cfg.SSLMode,
-	)
-
-	pgxPoolConfig, err := pgxpool.ParseConfig(dsn)
+	pgxPoolConfig, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database DSN: %w", err)
 	}
