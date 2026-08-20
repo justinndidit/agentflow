@@ -1,0 +1,79 @@
+version: "3"
+
+vars:
+  # Integration tests are build-tagged so the default suite stays fast and needs
+  # no Docker.
+  INTEGRATION_TAG: integration
+
+tasks:
+  default:
+    desc: Run the fast unit suite
+    cmds:
+      - task: test
+
+  test:
+    desc: Unit tests only — no Docker, no database
+    cmds:
+      - go test -race ./...
+
+  test:integration:
+    desc: Integration tests against a throwaway Postgres (requires Docker)
+    cmds:
+      # Containers are started per package run, so the per-package timeout has
+      # to cover an image pull on a cold machine.
+      - go test -race -tags {{.INTEGRATION_TAG}} -timeout 600s ./...
+
+  test:all:
+    desc: Everything
+    cmds:
+      - task: test
+      - task: test:integration
+
+  cover:
+    desc: Unit test coverage summary
+    cmds:
+      - go test -cover ./...
+
+  cover:html:
+    desc: Write and open an HTML coverage report
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out
+
+  lint:
+    desc: Vet both build configurations — the integration files are invisible to a plain vet
+    cmds:
+      - go vet ./...
+      - go vet -tags {{.INTEGRATION_TAG}} ./...
+
+  fmt:
+    desc: Format and report anything that changed
+    cmds:
+      - gofmt -l -w .
+
+  check:
+    desc: What CI runs
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test:all
+
+  run:
+    desc: Submit the example manifest (use -- -seed on a fresh database)
+    cmds:
+      - go run ./cmd/agentflow {{.CLI_ARGS}}
+
+  db:up:
+    desc: Start the development Postgres
+    cmds:
+      - docker compose -f docker-compose.dev.yml up -d
+
+  db:down:
+    desc: Stop the development Postgres, keeping its volume
+    cmds:
+      - docker compose -f docker-compose.dev.yml down
+
+  db:reset:
+    desc: Destroy the development Postgres and its data
+    cmds:
+      - docker compose -f docker-compose.dev.yml down -v
