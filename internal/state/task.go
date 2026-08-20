@@ -2,6 +2,7 @@
 package state
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,6 +50,45 @@ var validTransitions = map[TaskStatus][]TaskStatus{
 	PendingTaskStatus: {RunningTaskStatus, CancelledTaskStatus},
 	RunningTaskStatus: {CompletedTaskStatus, FailedTaskStatus, CancelledTaskStatus},
 	FailedTaskStatus:  {RunningTaskStatus},
+}
+
+// AllowedSources returns the statuses from which next is reachable, sorted so
+// the result is stable.
+//
+// This is the inverse of validTransitions, and it exists so the scheduling
+// statements can build their guard from the same table that answers
+// CanTransitionTo. The committer's UPDATE carries
+// `status = ANY(allowed)` rather than a hand-written `status = 'running'`,
+// which means the WHERE clause and the state machine cannot drift apart: adding
+// a transition here changes the SQL guard automatically.
+//
+// An unreachable status returns an empty slice, and a guard built from it
+// matches nothing — the safe direction, since a transition nobody declared
+// should be refused rather than allowed.
+func AllowedSources(next TaskStatus) []TaskStatus {
+	sources := []TaskStatus{}
+	for from, targets := range validTransitions {
+		for _, to := range targets {
+			if to == next {
+				sources = append(sources, from)
+				break
+			}
+		}
+	}
+
+	slices.Sort(sources)
+	return sources
+}
+
+// AllowedSourceNames is AllowedSources as plain strings, ready to be passed as
+// a text[] parameter and cast to task_status.
+func AllowedSourceNames(next TaskStatus) []string {
+	sources := AllowedSources(next)
+	names := make([]string, 0, len(sources))
+	for _, status := range sources {
+		names = append(names, string(status))
+	}
+	return names
 }
 
 func (t *Task) CanTransitionTo(next TaskStatus) bool {
