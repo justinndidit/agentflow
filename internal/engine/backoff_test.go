@@ -1,8 +1,15 @@
 package engine
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+
+	"github.com/justinndidit/agentflow/internal/config"
+	"github.com/justinndidit/agentflow/internal/persistence/models"
 )
 
 func TestBackoff_Exponential(t *testing.T) {
@@ -140,5 +147,41 @@ func TestDefaultBackoff_IsSane(t *testing.T) {
 		if got <= 0 || got > DefaultBackoff.Max {
 			t.Errorf("For(%d) = %s, outside (0, %s]", attempt, got, DefaultBackoff.Max)
 		}
+	}
+}
+
+// A config that never went through validation — a struct literal in a test, or
+// one assembled by hand — must not panic the node at startup. NewTicker rejects
+// a zero interval, and losing a whole node to a missing field is a far worse
+// failure than falling back to a default.
+func TestNewReaper_ZeroConfigDoesNotPanic(t *testing.T) {
+	logger := zerolog.Nop()
+
+	reaper := NewReaper(nil, &config.Engine{}, DefaultBackoff, &logger)
+	if reaper == nil {
+		t.Fatal("NewReaper returned nil")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Run would panic on a zero ticker before it ever reached the database.
+	if err := reaper.Run(ctx); err != nil {
+		t.Errorf("Run returned %v, want nil on cancellation", err)
+	}
+}
+
+func TestNewDispatcher_ZeroConfigDoesNotPanic(t *testing.T) {
+	logger := zerolog.Nop()
+
+	dispatcher := NewDispatcher(nil, uuid.New(), StaticCapacity(1),
+		HandlerFunc(func(context.Context, []*models.TaskRow) error { return nil }),
+		&config.Engine{}, &logger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := dispatcher.Run(ctx); err != nil {
+		t.Errorf("Run returned %v, want nil on cancellation", err)
 	}
 }

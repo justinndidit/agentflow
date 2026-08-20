@@ -110,6 +110,18 @@ func NewDispatcher(
 	for _, opt := range opts {
 		opt(d)
 	}
+
+	// Same defence as the reaper: a zero interval from an unvalidated config
+	// panics NewTicker at startup rather than failing anywhere useful.
+	if d.pollInterval <= 0 {
+		d.pollInterval = DefaultPollInterval
+	}
+	if d.batchSize <= 0 {
+		d.batchSize = 1
+	}
+	if d.leaseTTL <= 0 {
+		d.leaseTTL = time.Minute
+	}
 	return d
 }
 

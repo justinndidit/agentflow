@@ -62,7 +62,13 @@ func nodeConfig(t *testing.T, capacity int) *config.Config {
 	t.Helper()
 
 	cfg := dbtest.Config(t)
-	cfg.Engine = &config.Engine{Capacity: capacity, HeartbeatInterval: 1, LeaseTTL: 30}
+	cfg.Engine = &config.Engine{
+		Capacity:          capacity,
+		HeartbeatInterval: 1,
+		LeaseTTL:          30,
+		PollInterval:      1,
+		ReapInterval:      1,
+	}
 	return cfg
 }
 

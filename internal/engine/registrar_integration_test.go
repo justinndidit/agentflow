@@ -29,7 +29,13 @@ func fastEngineConfig() *config.Engine {
 }
 
 func fastEngineConfigWithCapacity(capacity int) *config.Engine {
-	return &config.Engine{Capacity: capacity, HeartbeatInterval: 1, LeaseTTL: 60}
+	return &config.Engine{
+		Capacity:          capacity,
+		HeartbeatInterval: 1,
+		LeaseTTL:          60,
+		PollInterval:      1,
+		ReapInterval:      1,
+	}
 }
 
 func TestRegistrar_RegistersOnBoot(t *testing.T) {

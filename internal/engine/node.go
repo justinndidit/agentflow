@@ -57,8 +57,9 @@ func NewNode(
 		logger:    logger,
 		registrar: NewRegistrar(stores.EngineStore, cfg.Engine, logger),
 		workers:   NewPool(cfg.Engine.Capacity, rt, committer, leaseTTL, logger),
-		reaper:    NewReaper(txManager, cfg.Engine, DefaultBackoff, logger),
-		listener:  NewListener(cfg.Database.DSN(), ReadyChannel, logger),
+		reaper: NewReaper(txManager, cfg.Engine, DefaultBackoff, logger,
+			WithReapInterval(time.Duration(cfg.Engine.ReapInterval)*time.Second)),
+		listener: NewListener(cfg.Database.DSN(), ReadyChannel, logger),
 	}
 }
 
@@ -86,6 +87,7 @@ func (n *Node) Run(ctx context.Context) error {
 		n.cfg.Engine,
 		n.logger,
 		WithWakeup(wake),
+		WithPollInterval(time.Duration(n.cfg.Engine.PollInterval)*time.Second),
 	)
 
 	n.logger.Info().

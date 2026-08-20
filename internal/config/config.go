@@ -88,6 +88,16 @@ type Engine struct {
 	// dead once its heartbeat is older than this, so a TTL close to the
 	// interval reclaims work from nodes that are merely busy.
 	LeaseTTL int `koanf:"lease_ttl" validate:"required,gt=0,gtfield=HeartbeatInterval"`
+
+	// PollInterval is the floor, in seconds, on how often a node looks for work
+	// when no notification wakes it sooner. Notifications are the fast path;
+	// this only covers one that was missed or never delivered.
+	PollInterval int `koanf:"poll_interval" validate:"required,gt=0"`
+
+	// ReapInterval is how often, in seconds, a node sweeps for abandoned work.
+	// Deliberately coarse relative to the heartbeat: reaping early is worse
+	// than reaping late, because it duplicates work that is still running.
+	ReapInterval int `koanf:"reap_interval" validate:"required,gt=0"`
 }
 
 type Migrations struct {
@@ -128,7 +138,9 @@ func defaults() Config {
 			Capacity:          4,
 			HeartbeatInterval: 5,
 			// Twelve heartbeats of slack before a node is declared dead.
-			LeaseTTL: 60,
+			LeaseTTL:     60,
+			PollInterval: 2,
+			ReapInterval: 15,
 		},
 	}
 }
