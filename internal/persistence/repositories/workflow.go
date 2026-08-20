@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/justinndidit/agentflow/internal/persistence/models"
+	"github.com/justinndidit/agentflow/internal/state"
 )
 
 type WorkflowStore interface {
@@ -15,6 +16,7 @@ type WorkflowStore interface {
 	GetWorkflowByName(context.Context, string) (*models.WorkflowRow, error)
 	GetWorkflowByID(context.Context, uuid.UUID) (*models.WorkflowRow, error)
 	DeleteWorkflow(context.Context, uuid.UUID) error
+	RecordTaskOutcome(context.Context, uuid.UUID, state.TaskStatus, int, int64) error
 }
 
 type PostgresWorkflowStore struct {
@@ -142,6 +144,73 @@ func (p *PostgresWorkflowStore) DeleteWorkflow(ctx context.Context, id uuid.UUID
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("delete workflow %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// RecordTaskOutcome moves a workflow's counters and, when the last task lands,
+// its status.
+//
+// Counters are maintained transactionally rather than derived. The alternative —
+// SELECT count(*) ... GROUP BY status on every completion — is correct but turns
+// each finish into a scan of that workflow's tasks, so the cost of finishing one
+// task grows with how many tasks the workflow has.
+//
+// cancelled takes a count rather than a flag because a single permanent failure
+// cascades to an arbitrary number of dependents, and they are all cancelled in
+// the same transaction that failed the task.
+//
+// A workflow is finished when completed + failed + cancelled reaches task_total.
+// It ends 'failed' if anything failed or was cancelled, and 'completed' only if
+// every task succeeded — a run that lost a branch did not succeed, even though
+// every task that could finish did.
+func (p *PostgresWorkflowStore) RecordTaskOutcome(
+	ctx context.Context,
+	workflowID uuid.UUID,
+	outcome state.TaskStatus,
+	cancelled int,
+	tokensUsed int64,
+) error {
+	stmt := `UPDATE workflows SET
+	        task_completed = task_completed + @completedDelta,
+	        task_failed    = task_failed + @failedDelta,
+	        task_cancelled = task_cancelled + @cancelledDelta,
+	        tokens_used    = tokens_used + @tokensUsed,
+	        status = CASE
+	            WHEN task_completed + @completedDelta
+	               + task_failed + @failedDelta
+	               + task_cancelled + @cancelledDelta >= task_total
+	            THEN CASE
+	                WHEN task_failed + @failedDelta
+	                   + task_cancelled + @cancelledDelta > 0
+	                THEN 'failed'::workflow_status
+	                ELSE 'completed'::workflow_status
+	            END
+	            ELSE 'running'::workflow_status
+	        END,
+	        updated_at = now()
+	  WHERE id = @workflowID`
+
+	completedDelta, failedDelta := 0, 0
+	switch outcome {
+	case state.CompletedTaskStatus:
+		completedDelta = 1
+	case state.FailedTaskStatus:
+		failedDelta = 1
+	}
+
+	tag, err := p.repo.Exec(ctx, stmt, pgx.NamedArgs{
+		"workflowID":     workflowID,
+		"completedDelta": completedDelta,
+		"failedDelta":    failedDelta,
+		"cancelledDelta": cancelled,
+		"tokensUsed":     tokensUsed,
+	})
+	if err != nil {
+		return fmt.Errorf("record %s outcome on workflow %s: %w", outcome, workflowID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("record %s outcome on workflow %s: %w", outcome, workflowID, ErrNotFound)
 	}
 	return nil
 }

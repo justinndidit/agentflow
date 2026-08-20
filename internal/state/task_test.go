@@ -258,3 +258,70 @@ func TestZeroTaskIsNotReady(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// AllowedSources inverts the transition table so the scheduling statements can
+// build their guard from it. If these drift, a guarded UPDATE either refuses a
+// legal transition or permits an illegal one.
+func TestAllowedSources(t *testing.T) {
+	tests := []struct {
+		next TaskStatus
+		want []TaskStatus
+	}{
+		// Claiming a task and retrying one both land on running.
+		{RunningTaskStatus, []TaskStatus{FailedTaskStatus, PendingTaskStatus}},
+		// The committer's two guards: only a running task may finish.
+		{CompletedTaskStatus, []TaskStatus{RunningTaskStatus}},
+		{FailedTaskStatus, []TaskStatus{RunningTaskStatus}},
+		// Cancellation reaches back to work that has not finished.
+		{CancelledTaskStatus, []TaskStatus{PendingTaskStatus, RunningTaskStatus}},
+		// Nothing returns a task to pending through the transition table; the
+		// reaper rewrites the row rather than transitioning it.
+		{PendingTaskStatus, []TaskStatus{}},
+	}
+
+	for _, test := range tests {
+		t.Run(string(test.next), func(t *testing.T) {
+			got := AllowedSources(test.next)
+			if !slices.Equal(got, test.want) {
+				t.Errorf("AllowedSources(%s) = %v, want %v", test.next, got, test.want)
+			}
+		})
+	}
+}
+
+// A guard built from an unknown status must match nothing rather than
+// everything — refusing an undeclared transition is the safe direction.
+func TestAllowedSources_UnknownStatus(t *testing.T) {
+	if got := AllowedSources(TaskStatus("bogus")); len(got) != 0 {
+		t.Errorf("AllowedSources(bogus) = %v, want empty", got)
+	}
+}
+
+// AllowedSources and CanTransitionTo read the same table and must agree for
+// every pair, or the SQL guard and the in-memory check disagree about what is
+// legal.
+func TestAllowedSources_AgreesWithCanTransitionTo(t *testing.T) {
+	all := []TaskStatus{
+		PendingTaskStatus, RunningTaskStatus, CompletedTaskStatus,
+		FailedTaskStatus, CancelledTaskStatus,
+	}
+
+	for _, from := range all {
+		for _, to := range all {
+			task := &Task{Status: from}
+			viaTable := slices.Contains(AllowedSources(to), from)
+
+			if got := task.CanTransitionTo(to); got != viaTable {
+				t.Errorf("%s -> %s: CanTransitionTo = %v but AllowedSources says %v",
+					from, to, got, viaTable)
+			}
+		}
+	}
+}
+
+func TestAllowedSourceNames(t *testing.T) {
+	got := AllowedSourceNames(CompletedTaskStatus)
+	if !slices.Equal(got, []string{"running"}) {
+		t.Errorf("AllowedSourceNames(completed) = %v, want [running]", got)
+	}
+}

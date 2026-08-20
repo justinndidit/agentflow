@@ -30,6 +30,12 @@ type TaskStore interface {
 	GetTaskByID(context.Context, uuid.UUID) (*models.TaskRow, error)
 	ListTasksByWorkflow(context.Context, uuid.UUID) ([]*models.TaskRow, error)
 	ClaimTasks(context.Context, uuid.UUID, int, time.Duration) ([]*models.TaskRow, error)
+	MarkCompleted(context.Context, Fence) (*TaskCommit, error)
+	MarkFailed(context.Context, Fence, string, time.Duration) (*TaskCommit, error)
+	DecrementDependents(context.Context, uuid.UUID, string) ([]uuid.UUID, error)
+	CancelDependents(context.Context, uuid.UUID, string) (int, error)
+	RescheduleAfter(context.Context, uuid.UUID, time.Duration) error
+	Notify(context.Context, string, string) error
 }
 
 type PostgresTaskStore struct {
