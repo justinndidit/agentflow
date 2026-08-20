@@ -47,6 +47,7 @@ const (
 type Config struct {
 	Database   *Database   `koanf:"database"`
 	Migrations *Migrations `koanf:"migrations"`
+	Engine     *Engine     `koanf:"engine"`
 }
 
 type Database struct {
@@ -63,6 +64,27 @@ type Database struct {
 	MaxIdleConns    int    `koanf:"max_idle_conns" validate:"gte=0"`
 	ConnMaxLifetime int    `koanf:"conn_max_lifetime" validate:"required,gt=0"`
 	ConnMaxIdleTime int    `koanf:"conn_max_idle_time" validate:"required,gt=0"`
+}
+
+// Engine configures a single node. These are node properties rather than
+// workflow properties: capacity is a function of this host's CPU and memory,
+// not of what any manifest asked for.
+type Engine struct {
+	// Capacity is the number of tasks this node will run concurrently. The
+	// dispatcher never claims past it — a lease you cannot honour is worse than
+	// a task left unclaimed.
+	Capacity int `koanf:"capacity" validate:"required,gt=0"`
+
+	// HeartbeatInterval is how often the registrar refreshes heartbeat_at, in
+	// seconds. Liveness is tracked per engine rather than per task, so this is
+	// one write per node per interval regardless of how much work is in flight.
+	HeartbeatInterval int `koanf:"heartbeat_interval" validate:"required,gt=0"`
+
+	// LeaseTTL is how long a claim is honoured for, in seconds. It has to be a
+	// comfortable multiple of HeartbeatInterval: the reaper treats an engine as
+	// dead once its heartbeat is older than this, so a TTL close to the
+	// interval reclaims work from nodes that are merely busy.
+	LeaseTTL int `koanf:"lease_ttl" validate:"required,gt=0,gtfield=HeartbeatInterval"`
 }
 
 type Migrations struct {
@@ -98,6 +120,12 @@ func defaults() Config {
 			// Relative to the working directory, so the repo runs from a clone
 			// without anyone editing a path.
 			MigrationsPath: "file://migrations",
+		},
+		Engine: &Engine{
+			Capacity:          4,
+			HeartbeatInterval: 5,
+			// Twelve heartbeats of slack before a node is declared dead.
+			LeaseTTL: 60,
 		},
 	}
 }

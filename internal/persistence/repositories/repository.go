@@ -30,14 +30,14 @@ type TxManager struct {
 type Stores struct {
 	TaskStore     TaskStore
 	WorkflowStore WorkflowStore
+	EngineStore   EngineStore
 }
 
 func NewStore(repo Repository) *Stores {
-	taskStore := NewPostgresTaskStore(repo)
-	workflowStore := NewPostgresWorkflowStore(repo)
 	return &Stores{
-		TaskStore:     taskStore,
-		WorkflowStore: workflowStore,
+		TaskStore:     NewPostgresTaskStore(repo),
+		WorkflowStore: NewPostgresWorkflowStore(repo),
+		EngineStore:   NewPostgresEngineStore(repo),
 	}
 }
 
