@@ -29,6 +29,7 @@ type TaskStore interface {
 	UpdateTask(context.Context, *models.TaskRow) error
 	GetTaskByID(context.Context, uuid.UUID) (*models.TaskRow, error)
 	ListTasksByWorkflow(context.Context, uuid.UUID) ([]*models.TaskRow, error)
+	ClaimTasks(context.Context, uuid.UUID, int, time.Duration) ([]*models.TaskRow, error)
 }
 
 type PostgresTaskStore struct {
@@ -191,4 +192,90 @@ func (p *PostgresTaskStore) ListTasksByWorkflow(ctx context.Context, workflowID 
 		return nil, fmt.Errorf("failed to collect rows from table:tasks for workflow %s: %w", workflowID, err)
 	}
 	return tasks, nil
+}
+
+// ClaimTasks atomically takes up to limit ready tasks for engineID and returns
+// the rows as claimed, leased for leaseTTL.
+//
+// This is the hot path of the whole system, and it is one statement on purpose:
+// selecting candidates and then updating them in a second round trip leaves a
+// window where another node claims the same row.
+//
+// FOR UPDATE SKIP LOCKED is what makes it contention-free. Two nodes racing for
+// the same row do not queue behind one another — the loser skips it and takes
+// the next one instead. Fewer than limit rows coming back therefore means
+// "nothing more was free right now", not "nothing more exists".
+//
+// Four conditions define readiness, and each one is load-bearing:
+//
+//   - status = 'pending'      — not already running, finished or cancelled.
+//   - remaining_deps = 0      — every dependency has committed.
+//   - not_before <= now()     — past its retry backoff, using the database
+//     clock so a node with a fast clock cannot claim work early.
+//   - attempt <= max_retries  — the retry budget still has room for the
+//     increment below.
+//
+// That last one is not in the architecture doc and is not optional. The claim
+// sets attempt = attempt + 1 across the whole batch in a single statement, and
+// the schema enforces CHECK (attempt <= max_retries + 1). A row already at its
+// ceiling would abort the entire statement rather than just itself, so one
+// exhausted task would stall every claim this node makes until something else
+// moved it. Filtering it out here means it is never selected; the reaper is
+// responsible for moving it to failed.
+//
+// The lease is deliberately not conditional on the engine's own view of its
+// capacity: limit is the caller's free-slot count, because claiming work you
+// cannot start means holding a lease you cannot honour.
+//
+// max_parallelism is intentionally not enforced here. Doing so would require
+// incrementing workflows.running_count inside this statement, which serialises
+// every claim for that workflow behind one row lock — fine across many small
+// workflows and a hard bottleneck inside one large one.
+func (p *PostgresTaskStore) ClaimTasks(
+	ctx context.Context,
+	engineID uuid.UUID,
+	limit int,
+	leaseTTL time.Duration,
+) ([]*models.TaskRow, error) {
+	// A node with no free slots asks for nothing rather than issuing a query
+	// that would claim work it cannot run.
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	stmt := `UPDATE tasks
+	    SET status           = 'running',
+	        engine_id        = @engineID,
+	        lease_epoch      = lease_epoch + 1,
+	        lease_expires_at = now() + @leaseTTL::interval,
+	        attempt          = attempt + 1,
+	        started_at       = COALESCE(started_at, now()),
+	        updated_at       = now()
+	  WHERE id IN (
+	        SELECT id
+	          FROM tasks
+	         WHERE status = 'pending'
+	           AND remaining_deps = 0
+	           AND not_before <= now()
+	           AND attempt <= max_retries
+	         ORDER BY priority DESC, created_at
+	         LIMIT @limit
+	         FOR UPDATE SKIP LOCKED
+	  )
+	RETURNING ` + taskColumns
+
+	rows, err := p.repo.Query(ctx, stmt, pgx.NamedArgs{
+		"engineID": engineID,
+		"leaseTTL": durationToInterval(leaseTTL),
+		"limit":    limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim up to %d tasks for engine %s: %w", limit, engineID, err)
+	}
+
+	claimed, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[models.TaskRow])
+	if err != nil {
+		return nil, fmt.Errorf("collect claimed tasks for engine %s: %w", engineID, err)
+	}
+	return claimed, nil
 }

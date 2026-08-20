@@ -5,10 +5,8 @@ package repositories_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
@@ -28,41 +26,10 @@ func stores(pool *pgxpool.Pool) *repositories.Stores {
 	return repositories.NewStore(repositories.NewPostgresRepository(pool, nopLogger(), nil))
 }
 
-// newWorkflowRow returns a workflow that satisfies every NOT NULL column, so a
-// test can override the one field it cares about.
-func newWorkflowRow() *models.WorkflowRow {
-	return &models.WorkflowRow{
-		BaseModel:         models.NewBaseModel(),
-		WorkflowName:      "test-workflow",
-		WorkflowNameSpace: "default",
-		Manifest:          []byte("name: test-workflow\n"),
-		Version:           1,
-		Status:            "pending",
-		TaskCount:         1,
-		MaxParallelism:    4,
-		MaxTokensPerRun:   1000,
-		DefaultTimeout:    2 * time.Minute,
-	}
-}
+func newWorkflowRow() *models.WorkflowRow { return dbtest.NewWorkflowRow() }
 
-// newTaskRow returns a task attached to workflowID. agentName must already
-// exist in agents — tasks.agent_name is a foreign key.
 func newTaskRow(workflowID uuid.UUID, taskKey, agentName string) *models.TaskRow {
-	timeout := pgtype.Interval{Microseconds: 300 * 1_000_000, Valid: true}
-
-	return &models.TaskRow{
-		BaseModel:     models.NewBaseModel(),
-		WorkflowID:    workflowID,
-		TaskKey:       taskKey,
-		AgentName:     agentName,
-		Status:        "pending",
-		DependsOn:     []string{},
-		RemainingDeps: 0,
-		InputTemplate: []byte(`{"role":"engineer"}`),
-		Priority:      4,
-		MaxRetries:    3,
-		Timeout:       &timeout,
-	}
+	return dbtest.NewTaskRow(workflowID, taskKey, agentName)
 }
 
 // seedWorkflow inserts a workflow and the agents its tasks will name, returning

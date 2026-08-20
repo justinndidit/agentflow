@@ -59,6 +59,9 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if *cfg.Migrations != *want.Migrations {
 		t.Errorf("Migrations = %+v, want %+v", *cfg.Migrations, *want.Migrations)
 	}
+	if *cfg.Engine != *want.Engine {
+		t.Errorf("Engine = %+v, want %+v", *cfg.Engine, *want.Engine)
+	}
 }
 
 // The defaults have to satisfy the same validation rules as anything supplied
@@ -397,5 +400,101 @@ func TestEnvSampleIsValid(t *testing.T) {
 	if *cfg.Migrations != *want.Migrations {
 		t.Errorf(".env.sample migrations drifted:\n got %+v\nwant %+v",
 			*cfg.Migrations, *want.Migrations)
+	}
+	if *cfg.Engine != *want.Engine {
+		t.Errorf(".env.sample engine drifted:\n got %+v\nwant %+v",
+			*cfg.Engine, *want.Engine)
+	}
+}
+
+func TestLoadConfig_EngineSection(t *testing.T) {
+	cfg, err := load(t, "",
+		"AGENTFLOW__ENGINE__CAPACITY=16",
+		"AGENTFLOW__ENGINE__HEARTBEAT_INTERVAL=2",
+		"AGENTFLOW__ENGINE__LEASE_TTL=30",
+	)
+	if err != nil {
+		t.Fatalf("expected the engine section to load, got: %v", err)
+	}
+
+	if cfg.Engine.Capacity != 16 {
+		t.Errorf("Capacity = %d, want 16", cfg.Engine.Capacity)
+	}
+	if cfg.Engine.HeartbeatInterval != 2 {
+		t.Errorf("HeartbeatInterval = %d, want 2", cfg.Engine.HeartbeatInterval)
+	}
+	if cfg.Engine.LeaseTTL != 30 {
+		t.Errorf("LeaseTTL = %d, want 30", cfg.Engine.LeaseTTL)
+	}
+}
+
+// A lease TTL at or below the heartbeat interval reclaims work from nodes that
+// are merely busy rather than dead, which shows up as tasks mysteriously
+// running twice. Rejecting it at load is far cheaper than debugging it.
+func TestLoadConfig_LeaseTTLMustExceedHeartbeat(t *testing.T) {
+	tests := []struct {
+		name string
+		vars []string
+	}{
+		{
+			name: "ttl below the interval",
+			vars: []string{
+				"AGENTFLOW__ENGINE__HEARTBEAT_INTERVAL=30",
+				"AGENTFLOW__ENGINE__LEASE_TTL=10",
+			},
+		},
+		{
+			name: "ttl equal to the interval",
+			vars: []string{
+				"AGENTFLOW__ENGINE__HEARTBEAT_INTERVAL=30",
+				"AGENTFLOW__ENGINE__LEASE_TTL=30",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := load(t, "", test.vars...)
+			if err == nil {
+				t.Fatal("expected a lease TTL no greater than the heartbeat interval to be rejected")
+			}
+			if !strings.Contains(err.Error(), "LeaseTTL") {
+				t.Errorf("error = %q, want it to name LeaseTTL", err)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_EngineValidationFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		vars    []string
+		wantErr string
+	}{
+		{
+			name:    "zero capacity",
+			vars:    []string{"AGENTFLOW__ENGINE__CAPACITY=0"},
+			wantErr: "Capacity",
+		},
+		{
+			name:    "negative capacity",
+			vars:    []string{"AGENTFLOW__ENGINE__CAPACITY=-1"},
+			wantErr: "Capacity",
+		},
+		{
+			name:    "zero heartbeat interval",
+			vars:    []string{"AGENTFLOW__ENGINE__HEARTBEAT_INTERVAL=0"},
+			wantErr: "HeartbeatInterval",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := load(t, "", test.vars...); err == nil {
+				t.Fatalf("expected a validation error mentioning %q", test.wantErr)
+			} else if !strings.Contains(err.Error(), test.wantErr) {
+				t.Errorf("error = %q, want it to name %s", err, test.wantErr)
+			}
+		})
 	}
 }
