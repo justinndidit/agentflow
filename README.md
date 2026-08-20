@@ -96,9 +96,24 @@ git clone https://github.com/justinndidit/agentflow
 cd agentflow
 go mod tidy
 
+cp .env.sample .env
+
 # start Postgres
 docker compose -f docker-compose.dev.yml up -d
 ```
+
+Configuration comes from built-in defaults, then `.env`, then real environment
+variables, each layer overriding the one before. The defaults match
+`docker-compose.dev.yml`, so `.env` is optional locally and a deployment can
+override a single value without shipping a file:
+
+```bash
+AGENTFLOW__DATABASE__HOST=db.internal go run ./cmd/agentflow
+```
+
+Application variables are namespaced `AGENTFLOW__<SECTION>__<KEY>`; the double
+underscore separates the section from the key, since key names contain single
+underscores of their own. `.env.sample` lists every setting with its default.
 
 Migrations are applied automatically on boot. On a fresh database, pass `-seed`
 the first time — `tasks.agent_name` is a foreign key to `agents(name)`, so a
