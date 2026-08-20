@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/config"
 	"github.com/justinndidit/agentflow/internal/engine"
 	"github.com/justinndidit/agentflow/internal/persistence/database"
@@ -116,11 +117,38 @@ func runEngine(logger *zerolog.Logger, args []string) error {
 
 	logger.Info().Str("runtime", rt.Name()).Msg("engine runtime selected")
 
-	node := engine.NewNode(cfg, db.Pool, rt, logger)
+	blobs, err := buildBlobStore(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+
+	node := engine.NewNode(cfg, db.Pool, rt, blobs, logger)
 	if err := node.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
+}
+
+// buildBlobStore connects to artifact storage, or returns the no-op store when
+// none is configured.
+func buildBlobStore(ctx context.Context, cfg *config.Config, logger *zerolog.Logger) (blob.Store, error) {
+	if cfg.Blob == nil || !cfg.Blob.Enabled {
+		logger.Info().Msg("blob storage disabled; task output must fit inline")
+		return blob.Disabled{}, nil
+	}
+
+	store, err := blob.NewS3Store(ctx, blob.S3Config{
+		Endpoint:  cfg.Blob.Endpoint,
+		AccessKey: cfg.Blob.AccessKey,
+		SecretKey: cfg.Blob.SecretKey,
+		Bucket:    cfg.Blob.Bucket,
+		Region:    cfg.Blob.Region,
+		UseSSL:    cfg.Blob.UseSSL,
+	}, logger)
+	if err != nil {
+		return nil, fmt.Errorf("connect to blob storage: %w", err)
+	}
+	return store, nil
 }
 
 // buildRuntime constructs the configured executor, returning a cleanup for the

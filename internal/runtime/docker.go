@@ -39,6 +39,16 @@ type Limits struct {
 	// StderrLimit bounds how much of a failed container's stderr is kept for
 	// error_message. Logs can be enormous and the column is not a log store.
 	StderrLimit int
+
+	// MaxOutputBytes is the largest stdout the engine will accept inline.
+	//
+	// This is a hard cap, not a hint. The engine reads a container's output
+	// into its own memory before it can judge the size, so an unbounded read is
+	// a way for one worker to take down a node that is running everyone else's
+	// tasks too. Beyond this the attempt fails and the author is pointed at
+	// AGENTFLOW_ARTIFACT_URI, which is the path that does not go through the
+	// engine at all.
+	MaxOutputBytes int
 }
 
 // DefaultLimits are deliberately modest. A node runs several of these at once,
@@ -51,6 +61,9 @@ var DefaultLimits = Limits{
 	// only local models should set this to "none".
 	NetworkMode: "bridge",
 	StderrLimit: 4096,
+	// Matches the architecture doc's inline threshold. Anything larger belongs
+	// in blob storage, written by the worker rather than relayed by the engine.
+	MaxOutputBytes: 256 * 1024,
 }
 
 // Docker runs each task as a container.
@@ -144,7 +157,7 @@ func (d *Docker) Execute(ctx context.Context, req Request) (*Response, error) {
 	}
 
 	code, waitErr := d.wait(ctx, id)
-	stdout, stderr, logErr := d.logs(ctx, id)
+	stdout, stderr, oversize, logErr := d.logs(ctx, id)
 	if logErr != nil {
 		d.logger.Warn().Err(logErr).
 			Str("func", "Execute").
@@ -161,6 +174,13 @@ func (d *Docker) Execute(ctx context.Context, req Request) (*Response, error) {
 	if code != 0 {
 		return nil, fmt.Errorf("task %s: agent exited %d: %s",
 			req.TaskKey, code, truncate(stderr, d.limits.StderrLimit))
+	}
+
+	if oversize {
+		return nil, fmt.Errorf(
+			"task %s: agent wrote more than %d bytes to stdout; "+
+				"write large output to AGENTFLOW_ARTIFACT_URI and return a reference to it",
+			req.TaskKey, d.limits.MaxOutputBytes)
 	}
 
 	return d.response(req, stdout)
@@ -320,8 +340,9 @@ func (d *Docker) wait(ctx context.Context, id string) (int64, error) {
 	}
 }
 
-// logs reads the container's output after it has exited.
-func (d *Docker) logs(ctx context.Context, id string) (string, string, error) {
+// logs reads the container's output after it has exited, reporting whether
+// stdout exceeded the inline limit.
+func (d *Docker) logs(ctx context.Context, id string) (stdout, stderr string, oversize bool, err error) {
 	// Its own context: the attempt's has usually expired by the time a
 	// timed-out container is being explained, and that is exactly when its
 	// stderr matters most.
@@ -333,16 +354,50 @@ func (d *Docker) logs(ctx context.Context, id string) (string, string, error) {
 		ShowStderr: true,
 	})
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	defer reader.Close()
 
-	var stdout, stderr bytes.Buffer
-	if err := demultiplex(reader, &stdout, &stderr); err != nil {
-		return stdout.String(), stderr.String(), err
+	// Both buffers are capped. stderr only ever becomes a truncated error
+	// message, and stdout beyond the limit is a failed attempt regardless — so
+	// there is no reason to hold more of either than will be used.
+	out := &cappedBuffer{limit: d.limits.MaxOutputBytes}
+	errOut := &cappedBuffer{limit: d.limits.StderrLimit}
+
+	if err := demultiplex(reader, out, errOut); err != nil {
+		return out.String(), errOut.String(), out.Overflowed, err
 	}
-	return stdout.String(), stderr.String(), nil
+	return out.String(), errOut.String(), out.Overflowed, nil
 }
+
+// cappedBuffer accumulates up to limit bytes and records whether more arrived.
+//
+// It keeps writing rather than erroring, because the log stream has to be
+// drained to the end: abandoning it mid-frame would leave the connection in an
+// unknown state and lose the stderr that explains what the worker did.
+type cappedBuffer struct {
+	limit      int
+	buffer     bytes.Buffer
+	Overflowed bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if c.limit > 0 {
+		remaining := c.limit - c.buffer.Len()
+		if remaining <= 0 {
+			c.Overflowed = true
+			return len(p), nil
+		}
+		if len(p) > remaining {
+			c.Overflowed = true
+			c.buffer.Write(p[:remaining])
+			return len(p), nil
+		}
+	}
+	return c.buffer.Write(p)
+}
+
+func (c *cappedBuffer) String() string { return c.buffer.String() }
 
 // demultiplex splits Docker's multiplexed log stream into stdout and stderr.
 //

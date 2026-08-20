@@ -51,6 +51,7 @@ type Config struct {
 	Database   *Database   `koanf:"database"`
 	Migrations *Migrations `koanf:"migrations"`
 	Engine     *Engine     `koanf:"engine"`
+	Blob       *Blob       `koanf:"blob"`
 }
 
 type Database struct {
@@ -117,6 +118,41 @@ type Engine struct {
 	TaskNetwork string `koanf:"task_network" validate:"required"`
 }
 
+// Blob addresses S3-compatible storage for task outputs too large for
+// Postgres. It is optional: with Enabled false, workers get no artifact
+// destination and are expected to return their output inline.
+type Blob struct {
+	Enabled bool `koanf:"enabled"`
+
+	// Endpoint is host:port. Empty means AWS S3 itself; a local MinIO is
+	// typically localhost:9000.
+	Endpoint string `koanf:"endpoint"`
+
+	AccessKey string `koanf:"access_key"`
+	SecretKey string `koanf:"secret_key"`
+	Bucket    string `koanf:"bucket"`
+	Region    string `koanf:"region"`
+
+	// UseSSL should only be false for a local MinIO on plain HTTP.
+	UseSSL bool `koanf:"use_ssl"`
+}
+
+// Validate checks the fields that only matter once storage is switched on.
+// They cannot carry `required` tags, because an engine with no blob storage is
+// a legitimate configuration and would otherwise fail to start.
+func (b *Blob) Validate() error {
+	if b == nil || !b.Enabled {
+		return nil
+	}
+	if b.Bucket == "" {
+		return errors.New("blob storage is enabled but no bucket is set")
+	}
+	if b.AccessKey == "" || b.SecretKey == "" {
+		return errors.New("blob storage is enabled but credentials are missing")
+	}
+	return nil
+}
+
 type Migrations struct {
 	// MigrationsPath is a golang-migrate source URL, not a filesystem path —
 	// it is handed straight to migrate.NewWithDatabaseInstance.
@@ -150,6 +186,17 @@ func defaults() Config {
 			// Relative to the working directory, so the repo runs from a clone
 			// without anyone editing a path.
 			MigrationsPath: "file://migrations",
+		},
+		Blob: &Blob{
+			// Off by default: an engine with nowhere to put artifacts still
+			// runs every workflow whose outputs fit inline, which is most of
+			// them, and demanding storage credentials to start would make the
+			// common case harder for no benefit.
+			Enabled:  false,
+			Endpoint: "localhost:9000",
+			Bucket:   "agentflow-artifacts",
+			Region:   "us-east-1",
+			UseSSL:   false,
 		},
 		Engine: &Engine{
 			Capacity:          4,
@@ -248,6 +295,11 @@ func LoadConfigWithOptions(logger *zerolog.Logger, opts Options) (*Config, error
 
 	if err := validator.New().Struct(cfg); err != nil {
 		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid configuration")
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if err := cfg.Blob.Validate(); err != nil {
+		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid blob configuration")
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

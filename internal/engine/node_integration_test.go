@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/config"
 	"github.com/justinndidit/agentflow/internal/dbtest"
 	"github.com/justinndidit/agentflow/internal/engine"
@@ -140,7 +141,7 @@ func TestNode_RunsAWorkflowToCompletion(t *testing.T) {
 	})
 
 	rt := &countingRuntime{inner: runtime.NewEcho(0)}
-	node := engine.NewNode(nodeConfig(t, 4), pool, rt, nopLogger())
+	node := engine.NewNode(nodeConfig(t, 4), pool, rt, blob.Disabled{}, nopLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -187,7 +188,7 @@ func TestNode_RespectsDependencyOrder(t *testing.T) {
 	})
 
 	rt := &countingRuntime{inner: runtime.NewEcho(0)}
-	node := engine.NewNode(nodeConfig(t, 4), pool, rt, nopLogger())
+	node := engine.NewNode(nodeConfig(t, 4), pool, rt, blob.Disabled{}, nopLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -231,7 +232,7 @@ func TestNode_FailureCascadesAndIndependentBranchCompletes(t *testing.T) {
 
 	echo := runtime.NewEcho(0)
 	echo.FailKeys = map[string]bool{"doomed": true}
-	node := engine.NewNode(nodeConfig(t, 4), pool, echo, nopLogger())
+	node := engine.NewNode(nodeConfig(t, 4), pool, echo, blob.Disabled{}, nopLogger())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -262,7 +263,7 @@ func TestNode_NeverExceedsCapacity(t *testing.T) {
 	workflow := seedGraph(t, pool, graph)
 
 	tracker := &concurrencyTracker{inner: runtime.NewEcho(30 * time.Millisecond)}
-	node := engine.NewNode(nodeConfig(t, capacity), pool, tracker, nopLogger())
+	node := engine.NewNode(nodeConfig(t, capacity), pool, tracker, blob.Disabled{}, nopLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -338,7 +339,7 @@ func TestNode_TwoNodesShareAWorkflow(t *testing.T) {
 		t.Cleanup(pool.Close)
 
 		runtimes[i] = &countingRuntime{inner: runtime.NewEcho(10 * time.Millisecond)}
-		node := engine.NewNode(nodeConfig(t, 4), pool, runtimes[i], nopLogger())
+		node := engine.NewNode(nodeConfig(t, 4), pool, runtimes[i], blob.Disabled{}, nopLogger())
 		go func() { _ = node.Run(runCtx) }()
 	}
 
@@ -371,7 +372,7 @@ func TestNode_GracefulShutdownFinishesInFlightWork(t *testing.T) {
 	workflow := seedGraph(t, pool, map[string][]string{"slow": nil})
 
 	rt := &countingRuntime{inner: runtime.NewEcho(700 * time.Millisecond)}
-	node := engine.NewNode(nodeConfig(t, 2), pool, rt, nopLogger())
+	node := engine.NewNode(nodeConfig(t, 2), pool, rt, blob.Disabled{}, nopLogger())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)

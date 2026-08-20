@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/persistence/models"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/runtime"
@@ -27,6 +28,7 @@ type Pool struct {
 	committer *Committer
 	resolver  InputResolver
 	images    AgentImages
+	blobs     blob.Store
 	logger    *zerolog.Logger
 	leaseTTL  time.Duration
 
@@ -42,6 +44,7 @@ func NewPool(
 	committer *Committer,
 	resolver InputResolver,
 	images AgentImages,
+	blobs blob.Store,
 	leaseTTL time.Duration,
 	logger *zerolog.Logger,
 ) *Pool {
@@ -54,12 +57,16 @@ func NewPool(
 	if images == nil {
 		images = StaticAgentImages("")
 	}
+	if blobs == nil {
+		blobs = blob.Disabled{}
+	}
 	return &Pool{
 		capacity:  capacity,
 		runtime:   rt,
 		committer: committer,
 		resolver:  resolver,
 		images:    images,
+		blobs:     blobs,
 		leaseTTL:  leaseTTL,
 		logger:    logger,
 	}
@@ -188,6 +195,22 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 		return
 	}
 
+	// Presigned before the run so the worker can upload directly. The engine
+	// hands out a destination and never touches the bytes: a large artifact
+	// must not pass through a process that is also running everyone else's
+	// tasks.
+	artifactKey := blob.ArtifactKey(task.WorkflowID, task.ID, task.Attempt)
+	artifactURL, err := p.blobs.PresignPut(taskCtx, artifactKey, p.deadline(task))
+	if err != nil {
+		// Not fatal to the attempt. A worker that had no use for the URL would
+		// otherwise be failed by a storage outage it never depended on.
+		p.logger.Warn().Err(err).
+			Str("func", "execute").
+			Str("task_key", task.TaskKey).
+			Msg("could not presign an artifact destination; running without one")
+		artifactURL = ""
+	}
+
 	response, runErr := p.runtime.Execute(taskCtx, runtime.Request{
 		TaskID:     task.ID,
 		WorkflowID: task.WorkflowID,
@@ -199,6 +222,7 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 		// already did rather than repeat its side effects.
 		IdempotencyKey: task.ID.String(),
 		Input:          input,
+		ArtifactURI:    artifactURL,
 	})
 
 	outcome := Outcome{
@@ -215,7 +239,47 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 		outcome.CostMicros = response.CostMicros
 	}
 
+	// Recorded whether or not the attempt succeeded: a failed run that uploaded
+	// a partial artifact is often the only evidence of what it was doing.
+	if artifactURL != "" {
+		outcome.ArtifactURI = p.storedArtifact(ctx, task, artifactKey)
+	}
+
 	p.commit(ctx, task, fence, outcome)
+}
+
+// storedArtifact reports the durable reference for anything the worker uploaded,
+// or nil if it uploaded nothing.
+//
+// Most tasks return their output inline and never touch the presigned URL, so
+// absence is the common case rather than a problem.
+func (p *Pool) storedArtifact(ctx context.Context, task *models.TaskRow, key string) *string {
+	// Its own context: the attempt's has often just expired, and an artifact a
+	// timed-out worker managed to upload is still worth recording.
+	statCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+
+	object, err := p.blobs.Stat(statCtx, key)
+	if err != nil {
+		p.logger.Error().Err(err).
+			Str("func", "storedArtifact").
+			Str("task_key", task.TaskKey).
+			Str("key", key).
+			Msg("could not check for an uploaded artifact")
+		return nil
+	}
+	if object == nil {
+		return nil
+	}
+
+	p.logger.Info().
+		Str("func", "storedArtifact").
+		Str("task_key", task.TaskKey).
+		Str("uri", object.URI).
+		Int64("bytes", object.Size).
+		Msg("task wrote an artifact")
+
+	return &object.URI
 }
 
 // commit records an outcome, treating a superseded lease as expected rather

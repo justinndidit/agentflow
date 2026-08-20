@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/dbtest"
 	"github.com/justinndidit/agentflow/internal/engine"
 	"github.com/justinndidit/agentflow/internal/runtime"
@@ -65,7 +66,7 @@ func TestDockerRuntime_RunsAWorkflowInContainers(t *testing.T) {
 	t.Cleanup(func() { _ = docker.Close() })
 
 	cfg := nodeConfig(t, 3)
-	node := engine.NewNode(cfg, f.pool, docker, nopLogger())
+	node := engine.NewNode(cfg, f.pool, docker, blob.Disabled{}, nopLogger())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -113,7 +114,7 @@ func TestDockerRuntime_UnknownImageFailsTheTask(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = docker.Close() })
 
-	node := engine.NewNode(nodeConfig(t, 2), f.pool, docker, nopLogger())
+	node := engine.NewNode(nodeConfig(t, 2), f.pool, docker, blob.Disabled{}, nopLogger())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -146,7 +147,7 @@ func TestDockerRuntime_UnregisteredAgentFailsTheTask(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = docker.Close() })
 
-	node := engine.NewNode(nodeConfig(t, 2), f.pool, docker, nopLogger())
+	node := engine.NewNode(nodeConfig(t, 2), f.pool, docker, blob.Disabled{}, nopLogger())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

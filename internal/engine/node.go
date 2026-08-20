@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/config"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/runtime"
@@ -43,6 +44,7 @@ func NewNode(
 	cfg *config.Config,
 	pool *pgxpool.Pool,
 	rt runtime.Runtime,
+	blobs blob.Store,
 	logger *zerolog.Logger,
 ) *Node {
 	txManager := repositories.NewTxManager(pool, logger)
@@ -58,7 +60,8 @@ func NewNode(
 		registrar: NewRegistrar(stores.EngineStore, cfg.Engine, logger),
 		workers: NewPool(cfg.Engine.Capacity, rt, committer,
 			NewTemplateResolver(stores.TaskResultStore),
-			NewCachedAgentImages(stores.AgentStore), leaseTTL, logger),
+			NewCachedAgentImages(stores.AgentStore),
+			blobs, leaseTTL, logger),
 		reaper: NewReaper(txManager, cfg.Engine, DefaultBackoff, logger,
 			WithReapInterval(time.Duration(cfg.Engine.ReapInterval)*time.Second)),
 		listener: NewListener(cfg.Database.DSN(), ReadyChannel, logger),

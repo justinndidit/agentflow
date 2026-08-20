@@ -27,6 +27,9 @@ What works today:
   stdout, with memory, CPU and PID limits, a read-only root, all capabilities
   dropped and no Docker socket. Node-local bounded concurrency, and every
   attempt capped by the shorter of the task's timeout and its lease
+- **Store** — output up to an inline limit (256 KB) goes in Postgres; larger
+  artifacts are uploaded by the worker itself to a presigned S3 destination, so
+  the bytes never pass through the engine
 - **Commit** — results, dependent decrements and workflow counters in one
   transaction, fenced by `lease_epoch` so a superseded node cannot overwrite a
   newer result
@@ -48,7 +51,12 @@ input as its output. Set `AGENTFLOW__ENGINE__RUNTIME=docker` and register agents
 against real images to run containers —
 [`examples/echo-agent`](examples/echo-agent) is a working reference.
 
-Not built yet: blob storage for large outputs, and observability.
+Blob storage is optional and off by default; enable it with
+`AGENTFLOW__BLOB__ENABLED=true`. Any S3-compatible service works — MinIO is in
+`docker-compose.dev.yml` for local use, and S3, R2 or Ceph need nothing but a
+different endpoint.
+
+Not built yet: observability — traces per workflow, cost aggregation.
 
 See [docs/agentflow_architecture.md](docs/agentflow_architecture.md) for the full
 design, and [docs/execution_path_plan.md](docs/execution_path_plan.md) for how
@@ -210,8 +218,9 @@ internal/
   runtime/             worker execution; echo only, Docker not implemented
   state/               task and workflow state machines, and the SQL guards
                        generated from them
+  blob/                S3-compatible artifact storage
   persistence/         connection pool, migrations, models, repositories
-  dbtest/              throwaway Postgres for integration tests
+  dbtest/              throwaway Postgres and MinIO for integration tests
   dtos/                API response types
   config/
 migrations/            schema, applied by golang-migrate
@@ -226,8 +235,9 @@ pkg/                   logger, set, json helpers
 - [pgx](https://github.com/jackc/pgx) — Postgres driver
 - [golang-migrate](https://github.com/golang-migrate/migrate) — schema migrations
 - [koanf](https://github.com/knadh/koanf) — layered configuration
+- [minio-go](https://github.com/minio/minio-go) — S3-compatible blob storage
 - [testcontainers](https://github.com/testcontainers/testcontainers-go) —
-  throwaway Postgres for the integration suite
+  throwaway Postgres and MinIO for the integration suite
 
 ## License
 

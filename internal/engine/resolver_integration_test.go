@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/dbtest"
 	"github.com/justinndidit/agentflow/internal/engine"
 	"github.com/justinndidit/agentflow/internal/persistence/models"
@@ -254,7 +255,7 @@ func TestPool_ResolutionFailureFailsTheTask(t *testing.T) {
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.NewTemplateResolver(f.stores.TaskResultStore),
 		engine.NewCachedAgentImages(f.stores.AgentStore),
-		testLeaseTTL, nopLogger())
+		blob.Disabled{}, testLeaseTTL, nopLogger())
 
 	if err := pool.Handle(ctx, []*models.TaskRow{rank}); err != nil {
 		t.Fatalf("Handle failed: %v", err)
@@ -295,7 +296,7 @@ func TestPool_RecordsTheResolvedInput(t *testing.T) {
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.NewTemplateResolver(f.stores.TaskResultStore),
 		engine.NewCachedAgentImages(f.stores.AgentStore),
-		testLeaseTTL, nopLogger())
+		blob.Disabled{}, testLeaseTTL, nopLogger())
 
 	if err := pool.Handle(ctx, []*models.TaskRow{rank}); err != nil {
 		t.Fatalf("Handle failed: %v", err)
@@ -341,7 +342,7 @@ func TestNode_ResolvesTemplatesBetweenTasks(t *testing.T) {
 	}
 
 	rt := &countingRuntime{inner: runtime.NewEcho(0)}
-	node := engine.NewNode(nodeConfig(t, 4), pool, rt, nopLogger())
+	node := engine.NewNode(nodeConfig(t, 4), pool, rt, blob.Disabled{}, nopLogger())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

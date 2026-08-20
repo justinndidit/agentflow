@@ -350,3 +350,111 @@ func TestDocker_Name(t *testing.T) {
 		t.Errorf("Name() = %q, want docker", got)
 	}
 }
+
+// The inline limit is a hard cap on what the engine will accept from stdout.
+//
+// The engine reads a container's output into its own memory before it can judge
+// the size, so an unbounded read is a way for one worker to take down a node
+// running everyone else's tasks. Beyond the limit the attempt fails and the
+// author is pointed at the path that does not go through the engine at all.
+func TestDocker_OversizeStdoutFailsTheAttempt(t *testing.T) {
+	limits := runtime.DefaultLimits
+	limits.MaxOutputBytes = 4096
+	docker := newDocker(t, runtime.WithLimits(limits))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Comfortably past the cap, and valid JSON, so the only thing wrong with it
+	// is the size.
+	_, err := docker.Execute(ctx, request(
+		`printf '{"data":"'; for i in $(seq 1 2000); do printf 'xxxxxxxxxx'; done; printf '"}'`))
+	if err == nil {
+		t.Fatal("expected oversize output to fail the attempt")
+	}
+	if !strings.Contains(err.Error(), "AGENTFLOW_ARTIFACT_URI") {
+		t.Errorf("error = %q, want it to point the author at the artifact URI", err)
+	}
+	if !strings.Contains(err.Error(), "4096") {
+		t.Errorf("error = %q, want it to name the limit", err)
+	}
+}
+
+// Output right up to the limit is still accepted; the cap is a ceiling, not a
+// margin to stay well clear of.
+func TestDocker_OutputAtTheLimitIsAccepted(t *testing.T) {
+	limits := runtime.DefaultLimits
+	limits.MaxOutputBytes = 4096
+	docker := newDocker(t, runtime.WithLimits(limits))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// {"data":"…"} with 1000 payload bytes, well inside 4096.
+	response, err := docker.Execute(ctx, request(
+		`printf '{"data":"'; for i in $(seq 1 100); do printf 'xxxxxxxxxx'; done; printf '"}'`))
+	if err != nil {
+		t.Fatalf("Execute failed for output inside the limit: %v", err)
+	}
+	if len(response.Output) == 0 {
+		t.Error("no output returned")
+	}
+}
+
+// The stderr kept for error_message is capped too: logs can be enormous and the
+// column is not a log store.
+func TestDocker_StderrIsTruncated(t *testing.T) {
+	limits := runtime.DefaultLimits
+	limits.StderrLimit = 256
+	docker := newDocker(t, runtime.WithLimits(limits))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	_, err := docker.Execute(ctx, request(
+		`for i in $(seq 1 500); do echo "a very long failure explanation" >&2; done; exit 1`))
+	if err == nil {
+		t.Fatal("expected a non-zero exit to fail")
+	}
+	if len(err.Error()) > 4096 {
+		t.Errorf("error message is %d bytes; stderr is not being truncated", len(err.Error()))
+	}
+}
+
+// The artifact destination reaches the worker as an environment variable, which
+// is the whole mechanism by which a large output bypasses the engine.
+func TestDocker_PassesArtifactURI(t *testing.T) {
+	docker := newDocker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	req := request(`printf '{"uri":"%s"}' "$AGENTFLOW_ARTIFACT_URI"`)
+	req.ArtifactURI = "https://blobs.example.com/presigned-destination"
+
+	response, err := docker.Execute(ctx, req)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if !strings.Contains(string(response.Output), "presigned-destination") {
+		t.Errorf("output = %s, want the artifact URI passed through", response.Output)
+	}
+}
+
+// With no blob storage configured there is no destination, and the variable is
+// absent rather than empty — an agent testing for it gets a clear answer.
+func TestDocker_OmitsArtifactURIWhenUnset(t *testing.T) {
+	docker := newDocker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	response, err := docker.Execute(ctx, request(
+		`if [ -z "${AGENTFLOW_ARTIFACT_URI+set}" ]; then echo '{"present":false}'; else echo '{"present":true}'; fi`))
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if strings.Contains(string(response.Output), "true") {
+		t.Error("AGENTFLOW_ARTIFACT_URI is set even with no blob storage configured")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/engine"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/runtime"
@@ -19,7 +20,7 @@ func newPool(f *commitFixture, capacity int, rt runtime.Runtime) *engine.Pool {
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.NewTemplateResolver(f.stores.TaskResultStore),
 		engine.NewCachedAgentImages(f.stores.AgentStore),
-		testLeaseTTL, nopLogger())
+		blob.Disabled{}, testLeaseTTL, nopLogger())
 }
 
 func TestPool_ReservesSlotsOnHandoff(t *testing.T) {
@@ -161,7 +162,7 @@ func TestPool_BoundsAttemptByLease(t *testing.T) {
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.StaticResolver{},
 		engine.StaticAgentImages("unused"),
-		300*time.Millisecond, nopLogger())
+		blob.Disabled{}, 300*time.Millisecond, nopLogger())
 
 	started := time.Now()
 	if err := pool.Handle(ctx, f.claimedNow(t)); err != nil {
