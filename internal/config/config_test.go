@@ -428,6 +428,32 @@ func TestLoadConfig_EngineSection(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_EngineIntervals(t *testing.T) {
+	cfg, err := load(t, "",
+		"AGENTFLOW__ENGINE__POLL_INTERVAL=7",
+		"AGENTFLOW__ENGINE__REAP_INTERVAL=11",
+	)
+	if err != nil {
+		t.Fatalf("expected the interval settings to load, got: %v", err)
+	}
+
+	if cfg.Engine.PollInterval != 7 {
+		t.Errorf("PollInterval = %d, want 7", cfg.Engine.PollInterval)
+	}
+	if cfg.Engine.ReapInterval != 11 {
+		t.Errorf("ReapInterval = %d, want 11", cfg.Engine.ReapInterval)
+	}
+
+	for _, vars := range [][]string{
+		{"AGENTFLOW__ENGINE__POLL_INTERVAL=0"},
+		{"AGENTFLOW__ENGINE__REAP_INTERVAL=0"},
+	} {
+		if _, err := load(t, "", vars...); err == nil {
+			t.Errorf("expected %v to be rejected", vars)
+		}
+	}
+}
+
 // A lease TTL at or below the heartbeat interval reclaims work from nodes that
 // are merely busy rather than dead, which shows up as tasks mysteriously
 // running twice. Rejecting it at load is far cheaper than debugging it.

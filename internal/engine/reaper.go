@@ -72,6 +72,20 @@ func NewReaper(
 	for _, opt := range opts {
 		opt(r)
 	}
+
+	// Defend against a config that never went through validation — a struct
+	// literal in a test, or a caller assembling one by hand. A zero interval
+	// panics NewTicker, which would take the whole node down at startup for
+	// what is really just a missing field.
+	if r.interval <= 0 {
+		r.interval = DefaultReapInterval
+	}
+	if r.batchSize <= 0 {
+		r.batchSize = DefaultReapBatch
+	}
+	if r.leaseTTL <= 0 {
+		r.leaseTTL = time.Minute
+	}
 	return r
 }
 

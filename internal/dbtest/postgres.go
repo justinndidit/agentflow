@@ -81,6 +81,13 @@ func DSN(t *testing.T) string {
 	return start(t).dsn
 }
 
+// HostPort is the test database's address, for subprocesses that build their
+// own configuration from the environment.
+func HostPort(t *testing.T) (string, int) {
+	t.Helper()
+	return hostPort(t, start(t))
+}
+
 // Config returns an application config pointed at the test database, built
 // through the real loader so tests exercise the same code path main does.
 func Config(t *testing.T) *config.Config {
@@ -242,6 +249,10 @@ func hostPort(t *testing.T, inst *instance) (string, int) {
 	}
 	return host, number
 }
+
+// RepoRoot is the module root, for tests that need to reach repository files —
+// building the binary, or pointing a subprocess at the migrations directory.
+func RepoRoot() string { return root() }
 
 func migrationsDir() string {
 	return filepath.Join(root(), "migrations")

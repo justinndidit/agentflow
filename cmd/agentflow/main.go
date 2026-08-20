@@ -1,7 +1,9 @@
+// Command agentflow submits workflow manifests and runs engine nodes.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,82 +15,152 @@ import (
 	"github.com/justinndidit/agentflow/internal/engine"
 	"github.com/justinndidit/agentflow/internal/persistence/database"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
+	"github.com/justinndidit/agentflow/internal/runtime"
 	"github.com/rs/zerolog"
 )
 
+const usage = `agentflow — distributed execution engine for AI workers
+
+Usage:
+  agentflow submit [flags]   submit a workflow manifest
+  agentflow engine [flags]   run an engine node until interrupted
+
+Run "agentflow <command> -h" for the flags of a command.
+`
+
 func main() {
-
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
-	var manifestFile string
-	var seedDevData bool
-	flag.StringVar(&manifestFile, "manifest", "example-workflow.yml", "workflow manifest location")
-	flag.BoolVar(&seedDevData, "seed", false, "insert the development agents the example manifest refers to")
-	flag.Parse()
 
-	cfg, err := config.LoadConfig(&logger)
-	if err != nil {
-		logger.Error().Err(err).Str("func", "main").Msg("failed to parse config")
-		return
+	if len(os.Args) < 2 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
 	}
 
-	startContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	command, args := os.Args[1], os.Args[2:]
+
+	var err error
+	switch command {
+	case "submit":
+		err = runSubmit(&logger, args)
+	case "engine":
+		err = runEngine(&logger, args)
+	case "-h", "--help", "help":
+		fmt.Fprint(os.Stdout, usage)
+		return
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", command, usage)
+		os.Exit(2)
+	}
+
+	if err != nil {
+		logger.Error().Err(err).Str("command", command).Msg("command failed")
+		os.Exit(1)
+	}
+}
+
+// runSubmit parses a manifest and persists it as a runnable graph, then exits.
+// It does not run anything: an engine node picks the work up.
+func runSubmit(logger *zerolog.Logger, args []string) error {
+	flags := flag.NewFlagSet("submit", flag.ExitOnError)
+	manifestFile := flags.String("manifest", "example-workflow.yml", "workflow manifest location")
+	seedDevData := flags.Bool("seed", false, "insert the development agents the example manifest refers to")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db := database.NewPostgresDatabase(cfg.Database, &logger)
-	err = db.Open(startContext)
+	_, db, err := open(ctx, logger, *seedDevData)
 	if err != nil {
-		logger.Error().Err(err).Str("func", "main").Msg("failed to open db connection")
-		return
+		return err
 	}
-	defer func() {
-		if err := db.Close(startContext); err != nil {
-			logger.Error().Err(err).Str("func", "main").Msg("error on db close")
-			return
+	defer closeDB(ctx, db, logger)
+
+	txManager := repositories.NewTxManager(db.Pool, logger)
+	processor := engine.NewManifestProcessor(logger, txManager)
+
+	workflow, err := processor.SubmitManifest(ctx, *manifestFile)
+	if err != nil {
+		return fmt.Errorf("submit manifest: %w", err)
+	}
+
+	fmt.Printf("workflow %s submitted (%d tasks)\n", workflow.ID, workflow.TaskCount)
+	return nil
+}
+
+// runEngine runs a node until interrupted.
+func runEngine(logger *zerolog.Logger, args []string) error {
+	flags := flag.NewFlagSet("engine", flag.ExitOnError)
+	seedDevData := flags.Bool("seed", false, "insert the development agents the example manifest refers to")
+	echoDelay := flags.Duration("echo-delay", time.Second,
+		"how long the placeholder echo runtime takes per task; the Docker runtime is not implemented yet")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	cfg, db, err := open(ctx, logger, *seedDevData)
+	if err != nil {
+		return err
+	}
+	defer closeDB(ctx, db, logger)
+
+	// Every task is executed by the echo runtime, which runs no container. The
+	// scheduling loops are proven against a fake worker before containers are
+	// introduced, so a scheduling bug and a container bug cannot be confused.
+	node := engine.NewNode(cfg, db.Pool, runtime.NewEcho(*echoDelay), logger)
+
+	if err := node.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
+// open loads configuration, connects, migrates, and optionally seeds.
+func open(ctx context.Context, logger *zerolog.Logger, seed bool) (*config.Config, *database.PostgresDatabase, error) {
+	cfg, err := config.LoadConfig(logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load config: %w", err)
+	}
+
+	db := database.NewPostgresDatabase(cfg.Database, logger)
+	if err := db.Open(ctx); err != nil {
+		return nil, nil, fmt.Errorf("open database: %w", err)
+	}
+
+	migrator, err := database.NewMigrator(cfg.Migrations, db.Pool, logger)
+	if err != nil {
+		closeDB(ctx, db, logger)
+		return nil, nil, fmt.Errorf("create migrator: %w", err)
+	}
+	if err := migrator.Migrate(ctx); err != nil {
+		closeDB(ctx, db, logger)
+		return nil, nil, fmt.Errorf("migrate: %w", err)
+	}
+
+	// Must come after Migrate and before any manifest is submitted:
+	// tasks.agent_name is a foreign key to agents(name), so submitting against
+	// an unseeded database fails the whole bulk insert.
+	if seed {
+		if err := database.SeedDevAgents(ctx, db.Pool, logger); err != nil {
+			closeDB(ctx, db, logger)
+			return nil, nil, fmt.Errorf("seed development agents: %w", err)
 		}
-	}()
-
-	dbMigrator, err := database.NewMigrator(cfg.Migrations, db.Pool, &logger)
-	if err != nil {
-		logger.Error().Err(err).Str("func", "main").Msg("failed to create db migrator")
-		return
-	}
-	err = dbMigrator.Migrate(startContext)
-	if err != nil {
-		logger.Error().Err(err).Str("func", "main").Msg("failed to migrate to database")
-		return
 	}
 
-	// Must come after Migrate and before SubmitManifest: tasks.agent_name is a
-	// foreign key to agents(name), so submitting a manifest against an unseeded
-	// database fails the whole bulk insert.
-	if seedDevData {
-		err = database.SeedDevAgents(startContext, db.Pool, &logger)
-		if err != nil {
-			logger.Error().Err(err).Str("func", "main").Msg("failed to seed development agents")
-			return
-		}
-	}
+	return cfg, db, nil
+}
 
-	txManager := repositories.NewTxManager(db.Pool, &logger)
-	manifestProcessor := engine.NewManifestProcessor(&logger, txManager)
-
-	workflow, err := manifestProcessor.SubmitManifest(startContext, manifestFile)
-	if err != nil {
-		fmt.Printf("error parsing manifest file: %s\n", err)
-		return
-	}
-
-	timeout := time.Duration(workflow.DefaultTimeout)
-
-	_, cancel := context.WithTimeout(startContext, timeout)
+func closeDB(ctx context.Context, db *database.PostgresDatabase, logger *zerolog.Logger) {
+	// Its own context: shutdown usually arrives with the caller's already
+	// cancelled, which would abort the close.
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 
-	// executor := engine.NewExecutor(workflow.DefaultWorkerCount, 10)
-	//TODO: update Run() to only accept context then pull tasks from db
-	// if err := executor.Run(ctx, nil); err != nil {
-	// 	fmt.Printf("workflow failed: %s\n", err)
-	// 	return
-	// }
-
-	fmt.Println("workflow submitted successfully!")
+	if err := db.Close(closeCtx); err != nil {
+		logger.Error().Err(err).Str("func", "closeDB").Msg("error closing database")
+	}
 }

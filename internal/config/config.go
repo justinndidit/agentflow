@@ -12,7 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	validator "github.com/go-playground/validator/v10"
@@ -85,6 +88,16 @@ type Engine struct {
 	// dead once its heartbeat is older than this, so a TTL close to the
 	// interval reclaims work from nodes that are merely busy.
 	LeaseTTL int `koanf:"lease_ttl" validate:"required,gt=0,gtfield=HeartbeatInterval"`
+
+	// PollInterval is the floor, in seconds, on how often a node looks for work
+	// when no notification wakes it sooner. Notifications are the fast path;
+	// this only covers one that was missed or never delivered.
+	PollInterval int `koanf:"poll_interval" validate:"required,gt=0"`
+
+	// ReapInterval is how often, in seconds, a node sweeps for abandoned work.
+	// Deliberately coarse relative to the heartbeat: reaping early is worse
+	// than reaping late, because it duplicates work that is still running.
+	ReapInterval int `koanf:"reap_interval" validate:"required,gt=0"`
 }
 
 type Migrations struct {
@@ -125,9 +138,30 @@ func defaults() Config {
 			Capacity:          4,
 			HeartbeatInterval: 5,
 			// Twelve heartbeats of slack before a node is declared dead.
-			LeaseTTL: 60,
+			LeaseTTL:     60,
+			PollInterval: 2,
+			ReapInterval: 15,
 		},
 	}
+}
+
+// DSN renders the connection string for this database.
+//
+// It lives on the config rather than in the database package because more than
+// one consumer needs it: the pool routes transactional work through it, and the
+// LISTEN connection is opened directly from it, deliberately bypassing any
+// pooler. Transaction-mode pooling silently breaks LISTEN, so those two paths
+// must not share a connection source.
+func (d *Database) DSN() string {
+	hostPort := net.JoinHostPort(d.Host, strconv.Itoa(d.Port))
+
+	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s",
+		url.QueryEscape(d.User),
+		url.QueryEscape(d.Password),
+		hostPort,
+		d.Name,
+		d.SSLMode,
+	)
 }
 
 // Options controls where configuration is read from. The zero value loads
