@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/engine"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/runtime"
@@ -17,7 +18,9 @@ import (
 func newPool(f *commitFixture, capacity int, rt runtime.Runtime) *engine.Pool {
 	return engine.NewPool(capacity, rt,
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
-		testLeaseTTL, nopLogger())
+		engine.NewTemplateResolver(f.stores.TaskResultStore),
+		engine.NewCachedAgentImages(f.stores.AgentStore),
+		blob.Disabled{}, testLeaseTTL, nopLogger())
 }
 
 func TestPool_ReservesSlotsOnHandoff(t *testing.T) {
@@ -157,7 +160,9 @@ func TestPool_BoundsAttemptByLease(t *testing.T) {
 	// A runtime slower than the lease allows.
 	pool := engine.NewPool(2, runtime.NewEcho(10*time.Second),
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
-		300*time.Millisecond, nopLogger())
+		engine.StaticResolver{},
+		engine.StaticAgentImages("unused"),
+		blob.Disabled{}, 300*time.Millisecond, nopLogger())
 
 	started := time.Now()
 	if err := pool.Handle(ctx, f.claimedNow(t)); err != nil {

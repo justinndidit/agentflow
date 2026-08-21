@@ -9,9 +9,9 @@ transaction against it, so engine nodes stay stateless and interchangeable.
 
 ## Status
 
-Under development. Workflows run end to end across multiple nodes, but the only
-worker available is a placeholder that echoes its input — no containers are
-executed yet, so Agentflow cannot run real agents.
+Under development. Workflows run end to end across multiple nodes, executing
+agents as containers. What is missing is the surrounding machinery — an agent
+registry beyond a seed table, blob storage for large outputs, and observability.
 
 What works today:
 
@@ -20,8 +20,16 @@ What works today:
   transaction
 - **Claim** — nodes take ready work atomically under `FOR UPDATE SKIP LOCKED`,
   bounded by their own free capacity
-- **Execute** — node-local bounded concurrency, with each attempt capped by the
-  shorter of the task's timeout and its lease
+- **Resolve** — `{{ tasks.<key>.output... }}` references are substituted at
+  dispatch from the outputs the task's dependencies committed, preserving the
+  referenced type
+- **Execute** — each task runs as a container: resolved JSON on stdin, JSON on
+  stdout, with memory, CPU and PID limits, a read-only root, all capabilities
+  dropped and no Docker socket. Node-local bounded concurrency, and every
+  attempt capped by the shorter of the task's timeout and its lease
+- **Store** — output up to an inline limit (256 KB) goes in Postgres; larger
+  artifacts are uploaded by the worker itself to a presigned S3 destination, so
+  the bytes never pass through the engine
 - **Commit** — results, dependent decrements and workflow counters in one
   transaction, fenced by `lease_epoch` so a superseded node cannot overwrite a
   newer result
@@ -31,14 +39,31 @@ What works today:
 - **Run** — `agentflow engine` registers, heartbeats, claims, runs, commits and
   reaps until interrupted, woken by `LISTEN`/`NOTIFY` with a poll interval as
   the floor
+- **Observe** — OpenTelemetry traces and metrics over OTLP. A workflow is one
+  trace, and its trace id is derived from the workflow's own id rather than
+  propagated, so every attempt lands in the right trace regardless of which
+  node ran it or how much later
 
 Two engine nodes against one Postgres survive one of them being `SIGKILL`ed
 mid-workflow: the work it held is reclaimed and rerun, the workflow completes,
 and the dead node's late writes are fenced out. That test lives in
 [`cmd/agentflow/kill_integration_test.go`](cmd/agentflow/kill_integration_test.go).
 
-Not built yet: the Docker runtime, template resolution at dispatch, blob storage
-for large outputs, and observability.
+The seeded development agents point at placeholder images that are not
+published anywhere, so the default runtime is `echo`, which returns a task's
+input as its output. Set `AGENTFLOW__ENGINE__RUNTIME=docker` and register agents
+against real images to run containers —
+[`examples/echo-agent`](examples/echo-agent) is a working reference.
+
+Blob storage is optional and off by default; enable it with
+`AGENTFLOW__BLOB__ENABLED=true`. Any S3-compatible service works — MinIO is in
+`docker-compose.dev.yml` for local use, and S3, R2 or Ceph need nothing but a
+different endpoint.
+
+Telemetry is optional and off by default; enable it with
+`AGENTFLOW__TELEMETRY__ENABLED=true`. `docker-compose.dev.yml` includes a
+collector that prints what it receives, so traces are visible locally without a
+backend.
 
 See [docs/agentflow_architecture.md](docs/agentflow_architecture.md) for the full
 design, and [docs/execution_path_plan.md](docs/execution_path_plan.md) for how
@@ -200,8 +225,11 @@ internal/
   runtime/             worker execution; echo only, Docker not implemented
   state/               task and workflow state machines, and the SQL guards
                        generated from them
+  blob/                S3-compatible artifact storage
+  telemetry/           traces and metrics, with trace ids derived from
+                       workflow ids rather than propagated
   persistence/         connection pool, migrations, models, repositories
-  dbtest/              throwaway Postgres for integration tests
+  dbtest/              throwaway Postgres and MinIO for integration tests
   dtos/                API response types
   config/
 migrations/            schema, applied by golang-migrate
@@ -216,8 +244,10 @@ pkg/                   logger, set, json helpers
 - [pgx](https://github.com/jackc/pgx) — Postgres driver
 - [golang-migrate](https://github.com/golang-migrate/migrate) — schema migrations
 - [koanf](https://github.com/knadh/koanf) — layered configuration
+- [minio-go](https://github.com/minio/minio-go) — S3-compatible blob storage
+- [OpenTelemetry](https://opentelemetry.io) — traces and metrics
 - [testcontainers](https://github.com/testcontainers/testcontainers-go) —
-  throwaway Postgres for the integration suite
+  throwaway Postgres and MinIO for the integration suite
 
 ## License
 

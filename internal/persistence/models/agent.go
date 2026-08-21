@@ -1,8 +1,12 @@
-// Package model
 package models
 
-type Agent struct {
+// AgentRow is a registered agent: a name a manifest can refer to, and the
+// container image that implements it.
+type AgentRow struct {
 	BaseModel
-	AgentName string `db:"name"`
-	Image     string `db:"agent_image"`
+
+	Name string `db:"name"`
+	// AgentImage is a container image reference. The engine never inspects it —
+	// what runs inside is the worker author's business.
+	AgentImage string `db:"agent_image"`
 }

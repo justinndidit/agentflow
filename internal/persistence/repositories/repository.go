@@ -32,6 +32,7 @@ type Stores struct {
 	WorkflowStore   WorkflowStore
 	EngineStore     EngineStore
 	TaskResultStore TaskResultStore
+	AgentStore      AgentStore
 }
 
 func NewStore(repo Repository) *Stores {
@@ -40,6 +41,7 @@ func NewStore(repo Repository) *Stores {
 		WorkflowStore:   NewPostgresWorkflowStore(repo),
 		EngineStore:     NewPostgresEngineStore(repo),
 		TaskResultStore: NewPostgresTaskResultStore(repo),
+		AgentStore:      NewPostgresAgentStore(repo),
 	}
 }
 

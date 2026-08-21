@@ -51,6 +51,8 @@ type Config struct {
 	Database   *Database   `koanf:"database"`
 	Migrations *Migrations `koanf:"migrations"`
 	Engine     *Engine     `koanf:"engine"`
+	Blob       *Blob       `koanf:"blob"`
+	Telemetry  *Telemetry  `koanf:"telemetry"`
 }
 
 type Database struct {
@@ -98,6 +100,97 @@ type Engine struct {
 	// Deliberately coarse relative to the heartbeat: reaping early is worse
 	// than reaping late, because it duplicates work that is still running.
 	ReapInterval int `koanf:"reap_interval" validate:"required,gt=0"`
+
+	// Runtime selects how tasks are executed. "docker" runs the agent's
+	// container image; "echo" runs no container and returns the input as the
+	// output, which is what the scheduling tests exercise.
+	Runtime string `koanf:"runtime" validate:"required,oneof=docker echo"`
+
+	// TaskMemoryMB caps a single container's memory. A node runs several at
+	// once, so the ceiling that matters is the host's rather than one task's.
+	TaskMemoryMB int64 `koanf:"task_memory_mb" validate:"required,gt=0"`
+
+	// TaskCPUs caps a single container's CPU, in whole cores. Fractions are
+	// allowed: 0.5 is half a core.
+	TaskCPUs float64 `koanf:"task_cpus" validate:"required,gt=0"`
+
+	// TaskNetwork is the Docker network mode for a task container. "none"
+	// isolates it completely; agents that call a model provider need "bridge".
+	TaskNetwork string `koanf:"task_network" validate:"required"`
+}
+
+// Blob addresses S3-compatible storage for task outputs too large for
+// Postgres. It is optional: with Enabled false, workers get no artifact
+// destination and are expected to return their output inline.
+type Blob struct {
+	Enabled bool `koanf:"enabled"`
+
+	// Endpoint is host:port. Empty means AWS S3 itself; a local MinIO is
+	// typically localhost:9000.
+	Endpoint string `koanf:"endpoint"`
+
+	AccessKey string `koanf:"access_key"`
+	SecretKey string `koanf:"secret_key"`
+	Bucket    string `koanf:"bucket"`
+	Region    string `koanf:"region"`
+
+	// UseSSL should only be false for a local MinIO on plain HTTP.
+	UseSSL bool `koanf:"use_ssl"`
+}
+
+// Validate checks the fields that only matter once storage is switched on.
+// They cannot carry `required` tags, because an engine with no blob storage is
+// a legitimate configuration and would otherwise fail to start.
+func (b *Blob) Validate() error {
+	if b == nil || !b.Enabled {
+		return nil
+	}
+	if b.Bucket == "" {
+		return errors.New("blob storage is enabled but no bucket is set")
+	}
+	if b.AccessKey == "" || b.SecretKey == "" {
+		return errors.New("blob storage is enabled but credentials are missing")
+	}
+	return nil
+}
+
+// Telemetry addresses an OpenTelemetry collector. Optional: with it disabled
+// every span and metric in the codebase becomes a no-op, so the instrumentation
+// costs nothing and the call sites read the same either way.
+type Telemetry struct {
+	Enabled bool `koanf:"enabled"`
+
+	// Endpoint is the collector's host:port for OTLP over gRPC.
+	Endpoint string `koanf:"endpoint"`
+
+	ServiceName string `koanf:"service_name"`
+
+	// Insecure disables TLS to the collector. Appropriate for a collector on
+	// the same host or inside the same network, and nowhere else.
+	Insecure bool `koanf:"insecure"`
+
+	// SampleRatio is the fraction of workflows traced, from 0 to 1.
+	//
+	// Sampling is per trace and a workflow is one trace, so a sampled workflow
+	// is sampled whole. Half of every workflow's spans would be far less useful
+	// than all of half of them.
+	SampleRatio float64 `koanf:"sample_ratio" validate:"gte=0,lte=1"`
+}
+
+// Validate checks the fields that only matter once telemetry is switched on.
+// They cannot carry `required` tags, because an engine with no collector is a
+// legitimate configuration and would otherwise fail to start.
+func (t *Telemetry) Validate() error {
+	if t == nil || !t.Enabled {
+		return nil
+	}
+	if t.Endpoint == "" {
+		return errors.New("telemetry is enabled but no collector endpoint is set")
+	}
+	if t.ServiceName == "" {
+		return errors.New("telemetry is enabled but no service name is set")
+	}
+	return nil
 }
 
 type Migrations struct {
@@ -134,6 +227,27 @@ func defaults() Config {
 			// without anyone editing a path.
 			MigrationsPath: "file://migrations",
 		},
+		Blob: &Blob{
+			// Off by default: an engine with nowhere to put artifacts still
+			// runs every workflow whose outputs fit inline, which is most of
+			// them, and demanding storage credentials to start would make the
+			// common case harder for no benefit.
+			Enabled:  false,
+			Endpoint: "localhost:9000",
+			Bucket:   "agentflow-artifacts",
+			Region:   "us-east-1",
+			UseSSL:   false,
+		},
+		Telemetry: &Telemetry{
+			// Off by default, for the same reason as blob storage: an engine
+			// with no collector runs every workflow perfectly well, and
+			// demanding one to start would make the common case harder.
+			Enabled:     false,
+			Endpoint:    "localhost:4317",
+			ServiceName: "agentflow",
+			Insecure:    true,
+			SampleRatio: 1,
+		},
 		Engine: &Engine{
 			Capacity:          4,
 			HeartbeatInterval: 5,
@@ -141,6 +255,13 @@ func defaults() Config {
 			LeaseTTL:     60,
 			PollInterval: 2,
 			ReapInterval: 15,
+			// Echo by default: the seeded development agents point at
+			// placeholder images that are not published anywhere, so docker
+			// would fail every task on a fresh checkout.
+			Runtime:      "echo",
+			TaskMemoryMB: 512,
+			TaskCPUs:     1,
+			TaskNetwork:  "bridge",
 		},
 	}
 }
@@ -224,6 +345,16 @@ func LoadConfigWithOptions(logger *zerolog.Logger, opts Options) (*Config, error
 
 	if err := validator.New().Struct(cfg); err != nil {
 		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid configuration")
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if err := cfg.Blob.Validate(); err != nil {
+		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid blob configuration")
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if err := cfg.Telemetry.Validate(); err != nil {
+		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid telemetry configuration")
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

@@ -19,6 +19,12 @@ type Request struct {
 	TaskKey    string
 	AgentName  string
 
+	// AgentImage is the container image implementing this agent, resolved from
+	// the agents table before dispatch. The Runtime never looks it up itself —
+	// keeping the database out of the execution boundary is what lets a runtime
+	// be swapped without touching persistence.
+	AgentImage string
+
 	// Attempt is 1 on the first try. Workers may use it for logging or to
 	// distinguish a retry, but must not use it to decide whether work was
 	// already done — that is what IdempotencyKey is for.
@@ -35,9 +41,26 @@ type Request struct {
 	// this key.
 	IdempotencyKey string
 
-	// Input is the resolved JSON the worker receives. Template resolution is
-	// not implemented yet, so today this is the stored input_template verbatim.
+	// Input is the resolved JSON the worker receives, after upstream template
+	// references have been substituted.
 	Input []byte
+
+	// ArtifactURI is where a worker should write output too large to return
+	// inline. Blob storage is not built yet, so this is empty today.
+	ArtifactURI string
+
+	// Command overrides the image's entrypoint.
+	//
+	// Real agents leave this empty: the worker contract makes the image the
+	// unit of deployment, and what runs inside it is the author's business.
+	// Nothing in the agent registry populates it — the column does not exist —
+	// so today it is set only by tests, which need to drive a general-purpose
+	// image rather than build a fixture image per case.
+	//
+	// It is on Request rather than hidden behind a test hook because if the
+	// registry ever does grow a command column, this is where it belongs, and
+	// a per-task value cannot live on the Runtime.
+	Command []string
 }
 
 // Response is what a worker reports on success.

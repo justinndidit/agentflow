@@ -22,8 +22,61 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    container_name: agentflow_blobs
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${BLOB_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${BLOB_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    networks:
+      - agentflow_network
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Creates the artifact bucket once and exits. Bucket creation is a deployment
+  # decision — lifecycle, retention, access policy — so engine nodes verify the
+  # bucket exists rather than creating it themselves.
+  minio_setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - agentflow_network
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${BLOB_ACCESS_KEY:-minioadmin} ${BLOB_SECRET_KEY:-minioadmin} &&
+      mc mb --ignore-existing local/${BLOB_BUCKET:-agentflow-artifacts} &&
+      echo 'artifact bucket ready'
+      "
+
+  # Prints received traces and metrics to its own logs, so telemetry is visible
+  # locally without a backend. `docker compose logs -f otel` to watch.
+  otel:
+    image: otel/opentelemetry-collector:latest
+    container_name: agentflow_otel
+    restart: always
+    command: ["--config=/etc/otel/config.yml"]
+    volumes:
+      - ./scripts/otel-collector.yml:/etc/otel/config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP/gRPC
+    networks:
+      - agentflow_network
+
 volumes:
   postgres_data:
+  minio_data:
 
 networks:
   agentflow_network:

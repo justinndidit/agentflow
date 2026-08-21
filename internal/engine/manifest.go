@@ -6,7 +6,9 @@ import (
 	"github.com/justinndidit/agentflow/internal/manifest"
 	"github.com/justinndidit/agentflow/internal/persistence/models"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
+	"github.com/justinndidit/agentflow/internal/telemetry"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type manifestProcessor struct {
@@ -25,6 +27,9 @@ func NewManifestProcessor(
 
 func (p *manifestProcessor) SubmitManifest(ctx context.Context, manifestFileLocation string) (*models.WorkflowRow, error) {
 	p.logger.Info().Str("func", "SubmitManifest").Msg("submitManifest request")
+
+	ctx, span := telemetry.Tracer().Start(ctx, "submit manifest")
+	defer span.End()
 	workflow, definitionByte, err := manifest.Parse(manifestFileLocation)
 	if err != nil {
 		return nil, err
@@ -57,6 +62,14 @@ func (p *manifestProcessor) SubmitManifest(ctx context.Context, manifestFileLoca
 		}
 		newTasks = append(newTasks, &newTask)
 	}
+
+	// From here the workflow has an id, which is also its trace id — so the
+	// rest of the submit, and every attempt on every node afterwards, belongs
+	// to one trace without anything being propagated between them.
+	span.SetAttributes(
+		telemetry.AttrWorkflowID.String(wf.ID.String()),
+		attribute.Int("agentflow.task_count", len(newTasks)),
+	)
 
 	var workflowDB *models.WorkflowRow
 	err = p.txManager.WithTransaction(ctx, func(ctx context.Context, stores *repositories.Stores) error {

@@ -8,6 +8,7 @@ import (
 	"github.com/justinndidit/agentflow/internal/manifest"
 	"github.com/justinndidit/agentflow/internal/state"
 	"github.com/justinndidit/agentflow/pkg/data"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type TaskRow struct {
@@ -109,4 +110,29 @@ func NewTaskFromDefinition(t manifest.TaskDefinition, workflowID uuid.UUID) (Tas
 		MaxRetries:    int(t.MaxRetries),
 		Timeout:       &timeout,
 	}, nil
+}
+
+// Key identifies this task in a span name. It satisfies the telemetry package's
+// SpanSubject interface, which is defined there rather than here so telemetry
+// stays independent of persistence.
+func (r TaskRow) Key() string { return r.TaskKey }
+
+// Attributes describes this task for tracing.
+//
+// The engine id is included so a trace shows which node ran an attempt, which
+// is the first thing anyone asks when one workflow's tasks behave differently
+// from another's.
+func (r TaskRow) Attributes() []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.String("agentflow.workflow_id", r.WorkflowID.String()),
+		attribute.String("agentflow.task_id", r.ID.String()),
+		attribute.String("agentflow.task_key", r.TaskKey),
+		attribute.String("agentflow.agent", r.AgentName),
+		attribute.Int("agentflow.attempt", r.Attempt),
+		attribute.Int64("agentflow.lease_epoch", r.LeaseEpoch),
+	}
+	if r.EngineID != nil {
+		attrs = append(attrs, attribute.String("agentflow.engine_id", r.EngineID.String()))
+	}
+	return attrs
 }
