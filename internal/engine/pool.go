@@ -10,6 +10,7 @@ import (
 	"github.com/justinndidit/agentflow/internal/persistence/models"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/runtime"
+	"github.com/justinndidit/agentflow/internal/telemetry"
 	"github.com/rs/zerolog"
 )
 
@@ -160,9 +161,20 @@ func (p *Pool) Drain(ctx context.Context) error {
 func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 	fence := repositories.FenceFor(task)
 
+	// The attempt's span hangs off the workflow's root, which was never created
+	// on this node — its identity is derived from the workflow id rather than
+	// propagated, so a task claimed hours later on a different machine still
+	// lands in the right trace.
+	spanCtx, span := telemetry.StartAttemptSpan(
+		telemetry.WorkflowContext(ctx, task.WorkflowID), task)
+	defer span.End()
+
+	telemetry.Meters().PoolInflight(spanCtx, 1)
+	defer telemetry.Meters().PoolInflight(spanCtx, -1)
+
 	// Not the dispatcher's context: cancelling it means "stop claiming", not
 	// "abandon what is already running". Draining is what waits for these.
-	taskCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.deadline(task))
+	taskCtx, cancel := context.WithTimeout(context.WithoutCancel(spanCtx), p.deadline(task))
 	defer cancel()
 
 	started := time.Now()
@@ -172,6 +184,7 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 	// batch before any of it starts.
 	input, err := p.resolver.Resolve(taskCtx, task)
 	if err != nil {
+		telemetry.RecordFailure(span, "resolve", err)
 		// A task failure, not an engine error: an upstream agent produced a
 		// shape this manifest did not expect. It is recorded with the template
 		// as the resolved input, since that is what the attempt actually had.
@@ -187,6 +200,7 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 	// implementation never needs database access and can be swapped freely.
 	image, err := p.images.ImageFor(taskCtx, task.AgentName)
 	if err != nil {
+		telemetry.RecordFailure(span, "image", err)
 		p.commit(ctx, task, fence, Outcome{
 			Duration:      time.Since(started),
 			ResolvedInput: input,
@@ -233,19 +247,26 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 	}
 	if runErr != nil {
 		outcome.Err = runErr
+		telemetry.RecordFailure(span, "execute", runErr)
+		telemetry.Meters().TaskFailed(spanCtx, task.AgentName, outcome.Duration)
 	} else if response != nil {
 		outcome.Output = response.Output
 		outcome.TokensUsed = response.TokensUsed
 		outcome.CostMicros = response.CostMicros
+
+		telemetry.RecordSuccess(span, response.TokensUsed)
+		telemetry.Meters().TaskCompleted(spanCtx, task.AgentName,
+			response.TokensUsed, response.CostMicros, outcome.Duration)
 	}
 
 	// Recorded whether or not the attempt succeeded: a failed run that uploaded
 	// a partial artifact is often the only evidence of what it was doing.
 	if artifactURL != "" {
-		outcome.ArtifactURI = p.storedArtifact(ctx, task, artifactKey)
+		outcome.ArtifactURI = p.storedArtifact(spanCtx, task, artifactKey)
+		telemetry.RecordArtifact(span, outcome.ArtifactURI)
 	}
 
-	p.commit(ctx, task, fence, outcome)
+	p.commit(spanCtx, task, fence, outcome)
 }
 
 // storedArtifact reports the durable reference for anything the worker uploaded,
@@ -300,6 +321,7 @@ func (p *Pool) commit(
 		if IsFenced(commitErr) {
 			// Expected, not a failure: this node's lease was reclaimed while the
 			// work ran, and another node has already redone it. Discard.
+			telemetry.Meters().WriteFenced(ctx, task.AgentName)
 			p.logger.Warn().
 				Str("func", "execute").
 				Str("task_id", task.ID.String()).

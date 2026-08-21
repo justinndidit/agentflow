@@ -60,6 +60,20 @@ services:
       echo 'artifact bucket ready'
       "
 
+  # Prints received traces and metrics to its own logs, so telemetry is visible
+  # locally without a backend. `docker compose logs -f otel` to watch.
+  otel:
+    image: otel/opentelemetry-collector:latest
+    container_name: agentflow_otel
+    restart: always
+    command: ["--config=/etc/otel/config.yml"]
+    volumes:
+      - ./scripts/otel-collector.yml:/etc/otel/config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP/gRPC
+    networks:
+      - agentflow_network
+
 volumes:
   postgres_data:
   minio_data:

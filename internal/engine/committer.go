@@ -8,6 +8,7 @@ import (
 	"github.com/justinndidit/agentflow/internal/persistence/models"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/state"
+	"github.com/justinndidit/agentflow/internal/telemetry"
 	"github.com/rs/zerolog"
 )
 
@@ -147,6 +148,8 @@ func (c *Committer) commitFailure(ctx context.Context, fence repositories.Fence,
 		if err != nil {
 			return err
 		}
+
+		telemetry.Meters().TasksCancelled(ctx, cancelled)
 
 		c.logger.Warn().
 			Err(outcome.Err).

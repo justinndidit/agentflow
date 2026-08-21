@@ -17,6 +17,7 @@ import (
 	"github.com/justinndidit/agentflow/internal/persistence/database"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/runtime"
+	"github.com/justinndidit/agentflow/internal/telemetry"
 	"github.com/rs/zerolog"
 )
 
@@ -117,6 +118,15 @@ func runEngine(logger *zerolog.Logger, args []string) error {
 
 	logger.Info().Str("runtime", rt.Name()).Msg("engine runtime selected")
 
+	// Before anything claims work, so the first attempt is traced like any
+	// other. A collector that is down must never stop a node: Init reports only
+	// configuration errors, and export failures are logged thereafter.
+	shutdownTelemetry, err := telemetry.Init(ctx, telemetryConfig(cfg), logger)
+	if err != nil {
+		return err
+	}
+	defer flushTelemetry(ctx, shutdownTelemetry, logger)
+
 	blobs, err := buildBlobStore(ctx, cfg, logger)
 	if err != nil {
 		return err
@@ -127,6 +137,33 @@ func runEngine(logger *zerolog.Logger, args []string) error {
 		return err
 	}
 	return nil
+}
+
+func telemetryConfig(cfg *config.Config) telemetry.Config {
+	if cfg.Telemetry == nil {
+		return telemetry.Config{}
+	}
+	return telemetry.Config{
+		Enabled:     cfg.Telemetry.Enabled,
+		Endpoint:    cfg.Telemetry.Endpoint,
+		ServiceName: cfg.Telemetry.ServiceName,
+		Insecure:    cfg.Telemetry.Insecure,
+		SampleRatio: cfg.Telemetry.SampleRatio,
+	}
+}
+
+// flushTelemetry drains buffered spans and metrics on the way out.
+//
+// Its own context: shutdown arrives with the caller's already cancelled, and a
+// node that stops cleanly should not drop the telemetry describing what it did
+// last — which is exactly the part anyone investigating will want.
+func flushTelemetry(ctx context.Context, shutdown telemetry.Shutdown, logger *zerolog.Logger) {
+	flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+
+	if err := shutdown(flushCtx); err != nil {
+		logger.Error().Err(err).Msg("error flushing telemetry")
+	}
 }
 
 // buildBlobStore connects to artifact storage, or returns the no-op store when

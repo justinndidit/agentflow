@@ -39,6 +39,10 @@ What works today:
 - **Run** — `agentflow engine` registers, heartbeats, claims, runs, commits and
   reaps until interrupted, woken by `LISTEN`/`NOTIFY` with a poll interval as
   the floor
+- **Observe** — OpenTelemetry traces and metrics over OTLP. A workflow is one
+  trace, and its trace id is derived from the workflow's own id rather than
+  propagated, so every attempt lands in the right trace regardless of which
+  node ran it or how much later
 
 Two engine nodes against one Postgres survive one of them being `SIGKILL`ed
 mid-workflow: the work it held is reclaimed and rerun, the workflow completes,
@@ -56,7 +60,10 @@ Blob storage is optional and off by default; enable it with
 `docker-compose.dev.yml` for local use, and S3, R2 or Ceph need nothing but a
 different endpoint.
 
-Not built yet: observability — traces per workflow, cost aggregation.
+Telemetry is optional and off by default; enable it with
+`AGENTFLOW__TELEMETRY__ENABLED=true`. `docker-compose.dev.yml` includes a
+collector that prints what it receives, so traces are visible locally without a
+backend.
 
 See [docs/agentflow_architecture.md](docs/agentflow_architecture.md) for the full
 design, and [docs/execution_path_plan.md](docs/execution_path_plan.md) for how
@@ -219,6 +226,8 @@ internal/
   state/               task and workflow state machines, and the SQL guards
                        generated from them
   blob/                S3-compatible artifact storage
+  telemetry/           traces and metrics, with trace ids derived from
+                       workflow ids rather than propagated
   persistence/         connection pool, migrations, models, repositories
   dbtest/              throwaway Postgres and MinIO for integration tests
   dtos/                API response types
@@ -236,6 +245,7 @@ pkg/                   logger, set, json helpers
 - [golang-migrate](https://github.com/golang-migrate/migrate) — schema migrations
 - [koanf](https://github.com/knadh/koanf) — layered configuration
 - [minio-go](https://github.com/minio/minio-go) — S3-compatible blob storage
+- [OpenTelemetry](https://opentelemetry.io) — traces and metrics
 - [testcontainers](https://github.com/testcontainers/testcontainers-go) —
   throwaway Postgres and MinIO for the integration suite
 

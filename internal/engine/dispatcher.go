@@ -9,6 +9,7 @@ import (
 	"github.com/justinndidit/agentflow/internal/config"
 	"github.com/justinndidit/agentflow/internal/persistence/models"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
+	"github.com/justinndidit/agentflow/internal/telemetry"
 	"github.com/rs/zerolog"
 )
 
@@ -202,6 +203,8 @@ func (d *Dispatcher) claimOnce(ctx context.Context) (int, error) {
 	if len(claimed) == 0 {
 		return 0, nil
 	}
+
+	telemetry.Meters().TaskClaimed(ctx, len(claimed), d.engineID.String())
 
 	d.logger.Info().
 		Str("func", "claimOnce").

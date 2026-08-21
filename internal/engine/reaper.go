@@ -7,6 +7,7 @@ import (
 	"github.com/justinndidit/agentflow/internal/config"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/state"
+	"github.com/justinndidit/agentflow/internal/telemetry"
 	"github.com/rs/zerolog"
 )
 
@@ -139,6 +140,8 @@ func (r *Reaper) ReapOnce(ctx context.Context) (int, error) {
 		count = len(reclaimed)
 
 		for _, task := range reclaimed {
+			telemetry.Meters().TaskReclaimed(ctx, string(task.Reason))
+
 			if task.Retryable() {
 				if err := r.rescheduleRetry(ctx, stores, task); err != nil {
 					return err

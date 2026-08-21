@@ -52,6 +52,7 @@ type Config struct {
 	Migrations *Migrations `koanf:"migrations"`
 	Engine     *Engine     `koanf:"engine"`
 	Blob       *Blob       `koanf:"blob"`
+	Telemetry  *Telemetry  `koanf:"telemetry"`
 }
 
 type Database struct {
@@ -153,6 +154,45 @@ func (b *Blob) Validate() error {
 	return nil
 }
 
+// Telemetry addresses an OpenTelemetry collector. Optional: with it disabled
+// every span and metric in the codebase becomes a no-op, so the instrumentation
+// costs nothing and the call sites read the same either way.
+type Telemetry struct {
+	Enabled bool `koanf:"enabled"`
+
+	// Endpoint is the collector's host:port for OTLP over gRPC.
+	Endpoint string `koanf:"endpoint"`
+
+	ServiceName string `koanf:"service_name"`
+
+	// Insecure disables TLS to the collector. Appropriate for a collector on
+	// the same host or inside the same network, and nowhere else.
+	Insecure bool `koanf:"insecure"`
+
+	// SampleRatio is the fraction of workflows traced, from 0 to 1.
+	//
+	// Sampling is per trace and a workflow is one trace, so a sampled workflow
+	// is sampled whole. Half of every workflow's spans would be far less useful
+	// than all of half of them.
+	SampleRatio float64 `koanf:"sample_ratio" validate:"gte=0,lte=1"`
+}
+
+// Validate checks the fields that only matter once telemetry is switched on.
+// They cannot carry `required` tags, because an engine with no collector is a
+// legitimate configuration and would otherwise fail to start.
+func (t *Telemetry) Validate() error {
+	if t == nil || !t.Enabled {
+		return nil
+	}
+	if t.Endpoint == "" {
+		return errors.New("telemetry is enabled but no collector endpoint is set")
+	}
+	if t.ServiceName == "" {
+		return errors.New("telemetry is enabled but no service name is set")
+	}
+	return nil
+}
+
 type Migrations struct {
 	// MigrationsPath is a golang-migrate source URL, not a filesystem path —
 	// it is handed straight to migrate.NewWithDatabaseInstance.
@@ -197,6 +237,16 @@ func defaults() Config {
 			Bucket:   "agentflow-artifacts",
 			Region:   "us-east-1",
 			UseSSL:   false,
+		},
+		Telemetry: &Telemetry{
+			// Off by default, for the same reason as blob storage: an engine
+			// with no collector runs every workflow perfectly well, and
+			// demanding one to start would make the common case harder.
+			Enabled:     false,
+			Endpoint:    "localhost:4317",
+			ServiceName: "agentflow",
+			Insecure:    true,
+			SampleRatio: 1,
 		},
 		Engine: &Engine{
 			Capacity:          4,
@@ -300,6 +350,11 @@ func LoadConfigWithOptions(logger *zerolog.Logger, opts Options) (*Config, error
 
 	if err := cfg.Blob.Validate(); err != nil {
 		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid blob configuration")
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if err := cfg.Telemetry.Validate(); err != nil {
+		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid telemetry configuration")
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
