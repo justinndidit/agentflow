@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/justinndidit/agentflow/internal/persistence/models"
@@ -88,9 +89,13 @@ func (c *Committer) commitSuccess(ctx context.Context, fence repositories.Fence,
 			return err
 		}
 
-		err = stores.WorkflowStore.RecordTaskOutcome(
+		workflow, err := stores.WorkflowStore.RecordTaskOutcome(
 			ctx, commit.WorkflowID, state.CompletedTaskStatus, 0, outcome.TokensUsed)
 		if err != nil {
+			return err
+		}
+
+		if err := c.enforceBudget(ctx, stores, workflow); err != nil {
 			return err
 		}
 
@@ -143,13 +148,17 @@ func (c *Committer) commitFailure(ctx context.Context, fence repositories.Fence,
 			return err
 		}
 
-		err = stores.WorkflowStore.RecordTaskOutcome(
+		workflow, err := stores.WorkflowStore.RecordTaskOutcome(
 			ctx, commit.WorkflowID, state.FailedTaskStatus, cancelled, outcome.TokensUsed)
 		if err != nil {
 			return err
 		}
 
 		telemetry.Meters().TasksCancelled(ctx, cancelled)
+
+		if err := c.enforceBudget(ctx, stores, workflow); err != nil {
+			return err
+		}
 
 		c.logger.Warn().
 			Err(outcome.Err).
@@ -162,6 +171,62 @@ func (c *Committer) commitFailure(ctx context.Context, fence repositories.Fence,
 
 		return nil
 	})
+}
+
+// enforceBudget stops a workflow that has spent past its declared ceiling.
+//
+// max_tokens is a soft ceiling, and deliberately so. Cost is reported by the
+// worker after the spend has already happened, and a crash between spending and
+// committing undercounts permanently — making it exact would need a distributed
+// transaction with the model provider, which does not exist. So the budget is
+// checked as results arrive rather than predicted in advance.
+//
+// Crossing it cancels everything not yet started. Tasks already running are
+// left to finish: their compute is already paid for, and killing them would
+// throw away results that are still worth recording. The overspend is therefore
+// bounded by what the fleet had in flight at the moment of crossing, which is
+// what "detected, not prevented" means in practice.
+//
+// A workflow with no ceiling declared is unlimited.
+func (c *Committer) enforceBudget(
+	ctx context.Context,
+	stores *repositories.Stores,
+	workflow *models.WorkflowRow,
+) error {
+	if workflow.MaxTokensPerRun <= 0 || workflow.TokensUsed < workflow.MaxTokensPerRun {
+		return nil
+	}
+
+	reason := fmt.Sprintf("workflow exceeded its token budget: %d used of %d allowed",
+		workflow.TokensUsed, workflow.MaxTokensPerRun)
+
+	cancelled, err := stores.TaskStore.CancelPending(ctx, workflow.ID, reason)
+	if err != nil {
+		return err
+	}
+	if cancelled == 0 {
+		// Already over and nothing left to stop, which is the common case on
+		// every commit after the first crossing.
+		return nil
+	}
+
+	if _, err := stores.WorkflowStore.RecordTaskOutcome(
+		ctx, workflow.ID, state.CancelledTaskStatus, cancelled, 0); err != nil {
+		return err
+	}
+
+	telemetry.Meters().TasksCancelled(ctx, cancelled)
+	telemetry.Meters().BudgetExceeded(ctx)
+
+	c.logger.Warn().
+		Str("func", "enforceBudget").
+		Str("workflow_id", workflow.ID.String()).
+		Int64("tokens_used", workflow.TokensUsed).
+		Int64("max_tokens", workflow.MaxTokensPerRun).
+		Int("cancelled", cancelled).
+		Msg("workflow exceeded its token budget; cancelled everything not yet started")
+
+	return nil
 }
 
 // rescheduleRetry records the failed attempt and pushes not_before out by the

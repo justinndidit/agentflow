@@ -11,20 +11,20 @@ import (
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 )
 
-func TestCachedAgentImages_ResolvesAndCaches(t *testing.T) {
+func TestCachedAgents_ResolvesAndCaches(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.Pool(t)
 	dbtest.SeedAgents(t, pool, "research-agent")
 
 	stores := repositories.NewStore(repositories.NewPostgresRepository(pool, nopLogger(), nil))
-	images := engine.NewCachedAgentImages(stores.AgentStore)
+	agents := engine.NewCachedAgents(stores.AgentStore)
 
-	first, err := images.ImageFor(ctx, "research-agent")
+	first, err := agents.Lookup(ctx, "research-agent")
 	if err != nil {
-		t.Fatalf("ImageFor failed: %v", err)
+		t.Fatalf("Lookup failed: %v", err)
 	}
-	if first == "" {
-		t.Fatal("ImageFor returned an empty image")
+	if first.Image == "" {
+		t.Fatal("Lookup returned an empty image")
 	}
 
 	// Re-point the agent behind the cache's back. The old value surviving is
@@ -36,40 +36,40 @@ func TestCachedAgentImages_ResolvesAndCaches(t *testing.T) {
 		t.Fatalf("failed to re-point the agent: %v", err)
 	}
 
-	second, err := images.ImageFor(ctx, "research-agent")
+	second, err := agents.Lookup(ctx, "research-agent")
 	if err != nil {
-		t.Fatalf("ImageFor failed: %v", err)
+		t.Fatalf("Lookup failed: %v", err)
 	}
-	if second != first {
-		t.Errorf("ImageFor = %q then %q; the lookup is not cached", first, second)
+	if second.Image != first.Image {
+		t.Errorf("Lookup = %q then %q; the lookup is not cached", first.Image, second.Image)
 	}
 
 	// A fresh cache does see the change, which is what a node restart gives.
-	fresh := engine.NewCachedAgentImages(stores.AgentStore)
-	updated, err := fresh.ImageFor(ctx, "research-agent")
+	fresh := engine.NewCachedAgents(stores.AgentStore)
+	updated, err := fresh.Lookup(ctx, "research-agent")
 	if err != nil {
-		t.Fatalf("ImageFor failed: %v", err)
+		t.Fatalf("Lookup failed: %v", err)
 	}
-	if updated != "changed:latest" {
-		t.Errorf("a fresh cache returned %q, want the updated image", updated)
+	if updated.Image != "changed:latest" {
+		t.Errorf("a fresh cache returned %q, want the updated image", updated.Image)
 	}
 }
 
-func TestCachedAgentImages_UnknownAgent(t *testing.T) {
+func TestCachedAgents_UnknownAgent(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.Pool(t)
 
 	stores := repositories.NewStore(repositories.NewPostgresRepository(pool, nopLogger(), nil))
-	images := engine.NewCachedAgentImages(stores.AgentStore)
+	agents := engine.NewCachedAgents(stores.AgentStore)
 
-	if _, err := images.ImageFor(ctx, "never-registered"); err == nil {
+	if _, err := agents.Lookup(ctx, "never-registered"); err == nil {
 		t.Fatal("expected an unregistered agent to fail")
 	}
 }
 
 // An agent registered with no image cannot be run, and saying so is better than
 // handing the runtime an empty reference.
-func TestCachedAgentImages_EmptyImage(t *testing.T) {
+func TestCachedAgents_EmptyImage(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.Pool(t)
 
@@ -80,9 +80,9 @@ func TestCachedAgentImages_EmptyImage(t *testing.T) {
 	}
 
 	stores := repositories.NewStore(repositories.NewPostgresRepository(pool, nopLogger(), nil))
-	images := engine.NewCachedAgentImages(stores.AgentStore)
+	agents := engine.NewCachedAgents(stores.AgentStore)
 
-	if _, err := images.ImageFor(ctx, "blank"); err == nil {
+	if _, err := agents.Lookup(ctx, "blank"); err == nil {
 		t.Fatal("expected an agent with no image to fail")
 	}
 }

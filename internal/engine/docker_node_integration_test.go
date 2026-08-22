@@ -6,6 +6,7 @@ import (
 	"context"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,5 +159,90 @@ func TestDockerRuntime_UnregisteredAgentFailsTheTask(t *testing.T) {
 	task := f.task(t, "orphan")
 	if task.ErrorMessage == nil {
 		t.Fatal("no error message recorded for an agent with no image")
+	}
+}
+
+// registerAgentWithCommand points an agent at an image plus a command.
+func registerAgentWithCommand(t *testing.T, f *commitFixture, name, image string, command []string) {
+	t.Helper()
+
+	_, err := f.pool.Exec(context.Background(),
+		`INSERT INTO agents (id, name, agent_image, agent_command)
+		 VALUES (gen_random_uuid(), $1, $2, $3)
+		 ON CONFLICT (name) DO UPDATE
+		   SET agent_image = EXCLUDED.agent_image, agent_command = EXCLUDED.agent_command`,
+		name, image, command)
+	if err != nil {
+		t.Fatalf("failed to register agent %s: %v", name, err)
+	}
+}
+
+// A command in the registry reaches the container, which is what lets one image
+// implement several agents rather than requiring a separate build per agent.
+func TestDockerRuntime_RegistryCommandReachesTheContainer(t *testing.T) {
+	ctx := context.Background()
+
+	f := newCommitFixture(t, map[string][]string{"custom": nil}, noBackoff)
+	// Plain alpine, whose own entrypoint would do nothing useful with JSON on
+	// stdin — so a passing test can only mean the registry's command ran.
+	registerAgentWithCommand(t, f, "research-agent", "alpine:latest",
+		[]string{"sh", "-c", `echo '{"ran":"registry-command"}'`})
+
+	docker, err := runtime.NewDocker(nopLogger())
+	if err != nil {
+		t.Fatalf("failed to connect to Docker: %v", err)
+	}
+	t.Cleanup(func() { _ = docker.Close() })
+
+	node := engine.NewNode(nodeConfig(t, 2), f.pool, docker, blob.Disabled{}, nopLogger())
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = node.Run(runCtx) }()
+
+	waitForWorkflow(t, f.pool, f.workflow.ID, string(state.CompletedWorkflowStatus), 120*time.Second)
+
+	task := f.task(t, "custom")
+	results, err := f.stores.TaskResultStore.ListByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListByTask failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("stored %d results, want 1", len(results))
+	}
+	if !strings.Contains(string(results[0].Output), "registry-command") {
+		t.Errorf("output = %s, want the registry's command to have run", results[0].Output)
+	}
+}
+
+// An agent with no command runs the image as built, which is the common case
+// and what the worker contract describes.
+func TestDockerRuntime_NoCommandRunsTheImageEntrypoint(t *testing.T) {
+	ctx := context.Background()
+	buildEchoAgent(t)
+
+	f := newCommitFixture(t, map[string][]string{"default-entrypoint": nil}, noBackoff)
+	registerAgentWithCommand(t, f, "research-agent", echoAgentImage, nil)
+
+	docker, err := runtime.NewDocker(nopLogger())
+	if err != nil {
+		t.Fatalf("failed to connect to Docker: %v", err)
+	}
+	t.Cleanup(func() { _ = docker.Close() })
+
+	node := engine.NewNode(nodeConfig(t, 2), f.pool, docker, blob.Disabled{}, nopLogger())
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = node.Run(runCtx) }()
+
+	waitForWorkflow(t, f.pool, f.workflow.ID, string(state.CompletedWorkflowStatus), 120*time.Second)
+
+	task := f.task(t, "default-entrypoint")
+	results, err := f.stores.TaskResultStore.ListByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListByTask failed: %v", err)
+	}
+	// echo-agent's entrypoint is cat, so the output is the input it was given.
+	if !strings.Contains(string(results[0].Output), "engineer") {
+		t.Errorf("output = %s, want the image's own entrypoint to have run", results[0].Output)
 	}
 }

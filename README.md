@@ -172,6 +172,19 @@ go run ./cmd/agentflow engine -seed     # first run
 go run ./cmd/agentflow engine           # afterwards
 ```
 
+Agents are registered in a table a manifest refers to by name, so a workflow
+cannot be submitted until the agents it names exist. `-seed` inserts
+placeholders for the example manifest; to point one at a real image:
+
+```bash
+go run ./cmd/agentflow agent register \
+  -name research-agent -image agentflow/echo-agent:latest
+go run ./cmd/agentflow agent list
+```
+
+Registering an existing name re-points it rather than duplicating it, and one
+image can serve several agents by giving each its own `-command`.
+
 Then submit:
 
 ```bash
@@ -217,7 +230,7 @@ assert that the code calls the methods it was written to call.
 ## Project Layout
 
 ```
-cmd/agentflow/         submit and engine commands
+cmd/agentflow/         submit, engine and agent commands
 internal/
   manifest/            YAML schema, parsing, template validation
   engine/              submit pipeline, and the five node loops:

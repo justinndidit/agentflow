@@ -53,6 +53,7 @@ type Config struct {
 	Engine     *Engine     `koanf:"engine"`
 	Blob       *Blob       `koanf:"blob"`
 	Telemetry  *Telemetry  `koanf:"telemetry"`
+	Retention  *Retention  `koanf:"retention"`
 }
 
 type Database struct {
@@ -193,6 +194,36 @@ func (t *Telemetry) Validate() error {
 	return nil
 }
 
+// Retention bounds how long finished workflows are kept.
+//
+// tasks and task_results grow without bound otherwise. This is deliberately not
+// partitioning, which the architecture doc also offers: partitioning is the
+// better answer at large volume but forces the task primary key to include
+// created_at, breaking the foreign key from task_results and turning lookups by
+// id alone into a scan of every partition. Retention caps growth without
+// touching the schema.
+type Retention struct {
+	Enabled bool `koanf:"enabled"`
+
+	// MaxAgeDays is how long a finished workflow is kept, measured from when it
+	// reached a terminal state rather than when it started. Zero keeps
+	// everything, which is what a deployment that wants its full history
+	// should get.
+	MaxAgeDays int `koanf:"max_age_days" validate:"gte=0"`
+}
+
+// Validate checks the fields that only matter once retention is switched on.
+func (r *Retention) Validate() error {
+	if r == nil || !r.Enabled {
+		return nil
+	}
+	if r.MaxAgeDays <= 0 {
+		return errors.New("retention is enabled but max_age_days is not set; " +
+			"a zero window would delete workflows the moment they finish")
+	}
+	return nil
+}
+
 type Migrations struct {
 	// MigrationsPath is a golang-migrate source URL, not a filesystem path —
 	// it is handed straight to migrate.NewWithDatabaseInstance.
@@ -237,6 +268,13 @@ func defaults() Config {
 			Bucket:   "agentflow-artifacts",
 			Region:   "us-east-1",
 			UseSSL:   false,
+		},
+		Retention: &Retention{
+			// Off by default. Deleting a user's history is not something an
+			// engine should start doing because it was installed, and a
+			// deployment that wants it should say how long to keep.
+			Enabled:    false,
+			MaxAgeDays: 30,
 		},
 		Telemetry: &Telemetry{
 			// Off by default, for the same reason as blob storage: an engine
@@ -350,6 +388,11 @@ func LoadConfigWithOptions(logger *zerolog.Logger, opts Options) (*Config, error
 
 	if err := cfg.Blob.Validate(); err != nil {
 		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid blob configuration")
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	if err := cfg.Retention.Validate(); err != nil {
+		logger.Error().Err(err).Str("func", "LoadConfig").Msg("invalid retention configuration")
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 

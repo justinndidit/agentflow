@@ -29,8 +29,13 @@ func NewWorkflowRow() *models.WorkflowRow {
 		Status:            string(state.PendingWorkflowStatus),
 		TaskCount:         1,
 		MaxParallelism:    4,
-		MaxTokensPerRun:   1000,
-		DefaultTimeout:    2 * time.Minute,
+		// Generous rather than realistic. A shared fixture must not impose a
+		// ceiling that tests unrelated to budgets can trip: at 100 tokens per
+		// echo task, a 1000-token budget silently cancelled every test running
+		// more than ten tasks once the ceiling started being enforced. Tests
+		// that are about budgets set their own.
+		MaxTokensPerRun: 100_000_000,
+		DefaultTimeout:  2 * time.Minute,
 	}
 }
 

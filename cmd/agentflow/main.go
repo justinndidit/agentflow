@@ -11,10 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"strings"
+	"text/tabwriter"
+
 	"github.com/justinndidit/agentflow/internal/blob"
 	"github.com/justinndidit/agentflow/internal/config"
 	"github.com/justinndidit/agentflow/internal/engine"
 	"github.com/justinndidit/agentflow/internal/persistence/database"
+	"github.com/justinndidit/agentflow/internal/persistence/models"
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 	"github.com/justinndidit/agentflow/internal/runtime"
 	"github.com/justinndidit/agentflow/internal/telemetry"
@@ -26,6 +30,12 @@ const usage = `agentflow — distributed execution engine for AI workers
 Usage:
   agentflow submit [flags]   submit a workflow manifest
   agentflow engine [flags]   run an engine node until interrupted
+  agentflow agent <cmd>      manage the agent registry
+
+Agent commands:
+  agentflow agent list
+  agentflow agent register -name NAME -image IMAGE [-command "CMD ARG..."]
+  agentflow agent remove -name NAME
 
 Run "agentflow <command> -h" for the flags of a command.
 `
@@ -46,6 +56,8 @@ func main() {
 		err = runSubmit(&logger, args)
 	case "engine":
 		err = runEngine(&logger, args)
+	case "agent":
+		err = runAgent(&logger, args)
 	case "-h", "--help", "help":
 		fmt.Fprint(os.Stdout, usage)
 		return
@@ -89,6 +101,137 @@ func runSubmit(logger *zerolog.Logger, args []string) error {
 
 	fmt.Printf("workflow %s submitted (%d tasks)\n", workflow.ID, workflow.TaskCount)
 	return nil
+}
+
+// runAgent manages the registry that maps an agent name to a container.
+//
+// A manifest names agents, and tasks.agent_name is a foreign key to
+// agents(name), so nothing can be submitted until the agents it refers to
+// exist. Before this the only way to register one was to write SQL, which made
+// the first useful thing anyone does with Agentflow the least documented.
+func runAgent(logger *zerolog.Logger, args []string) error {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return errors.New("agent: expected list, register or remove")
+	}
+
+	subcommand, rest := args[0], args[1:]
+	switch subcommand {
+	case "list":
+		return runAgentList(logger, rest)
+	case "register":
+		return runAgentRegister(logger, rest)
+	case "remove":
+		return runAgentRemove(logger, rest)
+	default:
+		return fmt.Errorf("agent: unknown command %q", subcommand)
+	}
+}
+
+func runAgentList(logger *zerolog.Logger, args []string) error {
+	flags := flag.NewFlagSet("agent list", flag.ExitOnError)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	_, db, err := open(ctx, logger, false)
+	if err != nil {
+		return err
+	}
+	defer closeDB(ctx, db, logger)
+
+	agents, err := agentStore(db, logger).ListAgents(ctx)
+	if err != nil {
+		return fmt.Errorf("list agents: %w", err)
+	}
+	if len(agents) == 0 {
+		fmt.Println("no agents registered")
+		return nil
+	}
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(writer, "NAME\tIMAGE\tCOMMAND")
+	for _, agent := range agents {
+		command := strings.Join(agent.AgentCommand, " ")
+		if command == "" {
+			command = "(image entrypoint)"
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\n", agent.Name, agent.AgentImage, command)
+	}
+	return writer.Flush()
+}
+
+func runAgentRegister(logger *zerolog.Logger, args []string) error {
+	flags := flag.NewFlagSet("agent register", flag.ExitOnError)
+	name := flags.String("name", "", "agent name, as referenced by a manifest")
+	image := flags.String("image", "", "container image implementing the agent")
+	command := flags.String("command", "",
+		"override the image entrypoint, space separated; leave empty to run the image as built")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *name == "" || *image == "" {
+		return errors.New("agent register: -name and -image are required")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	_, db, err := open(ctx, logger, false)
+	if err != nil {
+		return err
+	}
+	defer closeDB(ctx, db, logger)
+
+	row := models.NewAgentRow(*name, *image, strings.Fields(*command))
+	saved, err := agentStore(db, logger).UpsertAgent(ctx, &row)
+	if err != nil {
+		return fmt.Errorf("register agent: %w", err)
+	}
+
+	// Upsert, so this is also how an image is rolled forward. Deleting and
+	// re-inserting would break the foreign key from every task naming the
+	// agent, including tasks in workflows still running.
+	fmt.Printf("registered %s -> %s\n", saved.Name, saved.AgentImage)
+	return nil
+}
+
+func runAgentRemove(logger *zerolog.Logger, args []string) error {
+	flags := flag.NewFlagSet("agent remove", flag.ExitOnError)
+	name := flags.String("name", "", "agent name to remove")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *name == "" {
+		return errors.New("agent remove: -name is required")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	_, db, err := open(ctx, logger, false)
+	if err != nil {
+		return err
+	}
+	defer closeDB(ctx, db, logger)
+
+	// Refused while any task still names the agent, by the foreign key.
+	// Removing one out from under an unfinished workflow would leave tasks
+	// that can never be dispatched.
+	if err := agentStore(db, logger).DeleteAgent(ctx, *name); err != nil {
+		return fmt.Errorf("remove agent: %w", err)
+	}
+
+	fmt.Printf("removed %s\n", *name)
+	return nil
+}
+
+func agentStore(db *database.PostgresDatabase, logger *zerolog.Logger) repositories.AgentStore {
+	return repositories.NewStore(
+		repositories.NewPostgresRepository(db.Pool, logger, nil)).AgentStore
 }
 
 // runEngine runs a node until interrupted.

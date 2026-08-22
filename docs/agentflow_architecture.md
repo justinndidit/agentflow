@@ -502,6 +502,25 @@ Rule: outputs under a threshold (default 256 KB) are stored inline in
 holding the reference. Workers write blobs directly using credentials supplied
 by the engine; the engine never proxies bytes.
 
+The threshold is a hard cap, not a hint. The engine reads a worker's output into
+its own memory before it can judge the size, so an unbounded read is a way for
+one task to take down a node running everyone else's work. Past the limit the
+attempt fails and the author is pointed at `AGENTFLOW_ARTIFACT_URI`.
+
+**Artifacts are opaque to template resolution.** `{{ tasks.x.output.y }}` reads
+`task_results.output`, which holds only what came back inline — resolving
+against a blob would mean the engine fetching and parsing arbitrary worker
+output on the dispatch path, which is the proxying this design exists to avoid.
+So a task that writes an artifact must *also* return a small JSON descriptor for
+its dependents to read:
+
+```json
+{ "artifact": "s3://…", "rows": 20000, "schema": "jobs/v2" }
+```
+
+This is a constraint on manifest authors and belongs in the worker contract
+rather than being discovered when a downstream reference fails at dispatch.
+
 ---
 
 ## 6. Failure semantics
@@ -628,8 +647,8 @@ The engine does not know or care what runs inside. That is the point.
 
 ## 9. Explicitly out of scope for v1
 
-**`foreach` / dynamic fan-out.** The example manifest uses it; the engine will
-reject it. Runtime task-count expansion makes the DAG mutable — rows inserted
+**`foreach` / dynamic fan-out.** Runtime task-count expansion makes the DAG
+mutable — rows inserted
 mid-workflow, `remaining_deps` recomputed on join points after a fan-out
 resolves, and a barrier primitive that does not exist yet. It is the single
 largest piece of complexity available and it should not be half-built alongside
@@ -638,9 +657,9 @@ a scheduler that has never run in production. The schema does not preclude it.
 **Multi-tenancy.** Single entity. No `tenant_id`, no RBAC, no per-tenant quotas.
 Namespaces exist for organisation, not isolation.
 
-**`schedule:` / cron triggers, `approval_required:`.** Present in the example
-manifest, not implemented. Both should be removed from the example until they
-are, so the docs stop promising them.
+**`schedule:` / cron triggers, `approval_required:`.** Not implemented. The
+example manifest no longer advertises either, so nothing in the repository
+promises them.
 
 ---
 

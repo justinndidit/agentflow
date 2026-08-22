@@ -266,3 +266,30 @@ func (p *PostgresTaskStore) RescheduleAfter(ctx context.Context, taskID uuid.UUI
 	}
 	return nil
 }
+
+// CancelPending cancels every task in a workflow that has not started.
+//
+// Used when a workflow can no longer be allowed to continue — today, when it
+// crosses its token budget. Running tasks are left to finish: killing them
+// would discard compute already paid for, and their results are still worth
+// recording. That is what makes max_tokens a ceiling that is detected rather
+// than prevented.
+func (p *PostgresTaskStore) CancelPending(
+	ctx context.Context,
+	workflowID uuid.UUID,
+	reason string,
+) (int, error) {
+	tag, err := p.repo.Exec(ctx,
+		`UPDATE tasks
+		    SET status        = 'cancelled',
+		        finished_at   = now(),
+		        error_message = @reason,
+		        updated_at    = now()
+		  WHERE workflow_id = @workflowID
+		    AND status = 'pending'`,
+		pgx.NamedArgs{"workflowID": workflowID, "reason": reason})
+	if err != nil {
+		return 0, fmt.Errorf("cancel pending tasks in workflow %s: %w", workflowID, err)
+	}
+	return int(tag.RowsAffected()), nil
+}

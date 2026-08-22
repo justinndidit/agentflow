@@ -57,7 +57,7 @@ func poolWithBlobs(f *commitFixture, rt runtime.Runtime, blobs blob.Store) *engi
 	return engine.NewPool(2, rt,
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.NewTemplateResolver(f.stores.TaskResultStore),
-		engine.NewCachedAgentImages(f.stores.AgentStore),
+		engine.NewCachedAgents(f.stores.AgentStore),
 		blobs, testLeaseTTL, nopLogger())
 }
 

@@ -8,12 +8,22 @@ import (
 	"github.com/justinndidit/agentflow/internal/persistence/repositories"
 )
 
-// AgentImages resolves an agent name to the container image implementing it.
-type AgentImages interface {
-	ImageFor(ctx context.Context, agentName string) (string, error)
+// AgentSpec is what the runtime needs to know about an agent: which image, and
+// what to run inside it.
+type AgentSpec struct {
+	Image string
+
+	// Command overrides the image's entrypoint. Empty for most agents, so the
+	// image runs whatever it was built to run.
+	Command []string
 }
 
-// CachedAgentImages looks images up once per agent and remembers them.
+// AgentLookup resolves an agent name to the container that implements it.
+type AgentLookup interface {
+	Lookup(ctx context.Context, agentName string) (AgentSpec, error)
+}
+
+// CachedAgents resolves each agent once and remembers the answer.
 //
 // The mapping changes only when someone registers or re-points an agent, which
 // is a deployment action rather than something that happens mid-run. Querying
@@ -24,47 +34,49 @@ type AgentImages interface {
 // is the right default for a scheduler — an image changing underneath a running
 // workflow would make its tasks non-reproducible — but it does mean a re-point
 // is not picked up live.
-type CachedAgentImages struct {
+type CachedAgents struct {
 	store repositories.AgentStore
 
-	mu     sync.RWMutex
-	images map[string]string
+	mu    sync.RWMutex
+	specs map[string]AgentSpec
 }
 
-func NewCachedAgentImages(store repositories.AgentStore) *CachedAgentImages {
-	return &CachedAgentImages{
-		store:  store,
-		images: map[string]string{},
+func NewCachedAgents(store repositories.AgentStore) *CachedAgents {
+	return &CachedAgents{
+		store: store,
+		specs: map[string]AgentSpec{},
 	}
 }
 
-func (c *CachedAgentImages) ImageFor(ctx context.Context, agentName string) (string, error) {
+func (c *CachedAgents) Lookup(ctx context.Context, agentName string) (AgentSpec, error) {
 	c.mu.RLock()
-	image, cached := c.images[agentName]
+	spec, cached := c.specs[agentName]
 	c.mu.RUnlock()
 	if cached {
-		return image, nil
+		return spec, nil
 	}
 
 	agent, err := c.store.GetByName(ctx, agentName)
 	if err != nil {
-		return "", fmt.Errorf("resolve image for agent %s: %w", agentName, err)
+		return AgentSpec{}, fmt.Errorf("resolve agent %s: %w", agentName, err)
 	}
 	if agent.AgentImage == "" {
-		return "", fmt.Errorf("agent %s has no image registered", agentName)
+		return AgentSpec{}, fmt.Errorf("agent %s has no image registered", agentName)
 	}
 
+	spec = AgentSpec{Image: agent.AgentImage, Command: agent.AgentCommand}
+
 	c.mu.Lock()
-	c.images[agentName] = agent.AgentImage
+	c.specs[agentName] = spec
 	c.mu.Unlock()
 
-	return agent.AgentImage, nil
+	return spec, nil
 }
 
-// StaticAgentImages returns the same image for every agent. Used by runtimes
-// that do not run containers, where the lookup would be a pointless query.
-type StaticAgentImages string
+// StaticAgent returns the same spec for every agent. Used by runtimes that do
+// not run containers, where the lookup would be a pointless query.
+type StaticAgent AgentSpec
 
-func (s StaticAgentImages) ImageFor(context.Context, string) (string, error) {
-	return string(s), nil
+func (s StaticAgent) Lookup(context.Context, string) (AgentSpec, error) {
+	return AgentSpec(s), nil
 }

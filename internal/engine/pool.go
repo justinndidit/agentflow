@@ -28,7 +28,7 @@ type Pool struct {
 	runtime   runtime.Runtime
 	committer *Committer
 	resolver  InputResolver
-	images    AgentImages
+	agents    AgentLookup
 	blobs     blob.Store
 	logger    *zerolog.Logger
 	leaseTTL  time.Duration
@@ -44,7 +44,7 @@ func NewPool(
 	rt runtime.Runtime,
 	committer *Committer,
 	resolver InputResolver,
-	images AgentImages,
+	agents AgentLookup,
 	blobs blob.Store,
 	leaseTTL time.Duration,
 	logger *zerolog.Logger,
@@ -55,8 +55,8 @@ func NewPool(
 	if resolver == nil {
 		resolver = StaticResolver{}
 	}
-	if images == nil {
-		images = StaticAgentImages("")
+	if agents == nil {
+		agents = StaticAgent{}
 	}
 	if blobs == nil {
 		blobs = blob.Disabled{}
@@ -66,7 +66,7 @@ func NewPool(
 		runtime:   rt,
 		committer: committer,
 		resolver:  resolver,
-		images:    images,
+		agents:    agents,
 		blobs:     blobs,
 		leaseTTL:  leaseTTL,
 		logger:    logger,
@@ -196,11 +196,11 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 		return
 	}
 
-	// The image is resolved here rather than inside the runtime, so a Runtime
+	// The agent is resolved here rather than inside the runtime, so a Runtime
 	// implementation never needs database access and can be swapped freely.
-	image, err := p.images.ImageFor(taskCtx, task.AgentName)
+	agent, err := p.agents.Lookup(taskCtx, task.AgentName)
 	if err != nil {
-		telemetry.RecordFailure(span, "image", err)
+		telemetry.RecordFailure(span, "agent", err)
 		p.commit(ctx, task, fence, Outcome{
 			Duration:      time.Since(started),
 			ResolvedInput: input,
@@ -230,7 +230,8 @@ func (p *Pool) execute(ctx context.Context, task *models.TaskRow) {
 		WorkflowID: task.WorkflowID,
 		TaskKey:    task.TaskKey,
 		AgentName:  task.AgentName,
-		AgentImage: image,
+		AgentImage: agent.Image,
+		Command:    agent.Command,
 		Attempt:    task.Attempt,
 		// Stable across attempts by design, so a worker can recognise work it
 		// already did rather than repeat its side effects.

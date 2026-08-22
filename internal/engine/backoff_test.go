@@ -185,3 +185,37 @@ func TestNewDispatcher_ZeroConfigDoesNotPanic(t *testing.T) {
 		t.Errorf("Run returned %v, want nil on cancellation", err)
 	}
 }
+
+// A fleet started together would otherwise reap in lockstep forever,
+// concentrating every node's scan into the same instant.
+func TestJitter_SpreadsAcrossTheSecondHalf(t *testing.T) {
+	const interval = time.Minute
+
+	seen := map[time.Duration]bool{}
+	for range 500 {
+		got := jitter(interval)
+
+		// Downward only: sweeping early is harmless, while sweeping late lets
+		// abandoned work sit longer than the configured period promises.
+		if got > interval {
+			t.Fatalf("jitter(%s) = %s, want no more than the interval", interval, got)
+		}
+		if got < interval/2 {
+			t.Fatalf("jitter(%s) = %s, want at least half the interval", interval, got)
+		}
+		seen[got] = true
+	}
+
+	if len(seen) < 50 {
+		t.Errorf("500 calls produced %d distinct delays; sweeps are not being spread", len(seen))
+	}
+}
+
+func TestJitter_HandlesAZeroInterval(t *testing.T) {
+	if got := jitter(0); got != DefaultReapInterval {
+		t.Errorf("jitter(0) = %s, want the default interval", got)
+	}
+	if got := jitter(-time.Second); got != DefaultReapInterval {
+		t.Errorf("jitter(-1s) = %s, want the default interval", got)
+	}
+}

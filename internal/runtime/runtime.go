@@ -49,17 +49,13 @@ type Request struct {
 	// inline. Blob storage is not built yet, so this is empty today.
 	ArtifactURI string
 
-	// Command overrides the image's entrypoint.
+	// Command overrides the image's entrypoint, from the agent registry.
 	//
-	// Real agents leave this empty: the worker contract makes the image the
-	// unit of deployment, and what runs inside it is the author's business.
-	// Nothing in the agent registry populates it — the column does not exist —
-	// so today it is set only by tests, which need to drive a general-purpose
-	// image rather than build a fixture image per case.
-	//
-	// It is on Request rather than hidden behind a test hook because if the
-	// registry ever does grow a command column, this is where it belongs, and
-	// a per-task value cannot live on the Runtime.
+	// Empty for most agents, so the image runs whatever it was built to run.
+	// It exists because one image frequently implements several agents — a
+	// single worker distinguishing roles by argument is the common shape — and
+	// requiring a separate image per agent for that would be a build
+	// pipeline's worth of ceremony to express one flag.
 	Command []string
 }
 

@@ -19,7 +19,7 @@ func newPool(f *commitFixture, capacity int, rt runtime.Runtime) *engine.Pool {
 	return engine.NewPool(capacity, rt,
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.NewTemplateResolver(f.stores.TaskResultStore),
-		engine.NewCachedAgentImages(f.stores.AgentStore),
+		engine.NewCachedAgents(f.stores.AgentStore),
 		blob.Disabled{}, testLeaseTTL, nopLogger())
 }
 
@@ -161,7 +161,7 @@ func TestPool_BoundsAttemptByLease(t *testing.T) {
 	pool := engine.NewPool(2, runtime.NewEcho(10*time.Second),
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
 		engine.StaticResolver{},
-		engine.StaticAgentImages("unused"),
+		engine.StaticAgent{Image: "unused"},
 		blob.Disabled{}, 300*time.Millisecond, nopLogger())
 
 	started := time.Now()

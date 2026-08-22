@@ -35,6 +35,7 @@ type Node struct {
 	dispatcher *Dispatcher
 	workers    *Pool
 	reaper     *Reaper
+	retention  *Retention
 	listener   *Listener
 }
 
@@ -60,7 +61,7 @@ func NewNode(
 		registrar: NewRegistrar(stores.EngineStore, cfg.Engine, logger),
 		workers: NewPool(cfg.Engine.Capacity, rt, committer,
 			NewTemplateResolver(stores.TaskResultStore),
-			NewCachedAgentImages(stores.AgentStore),
+			NewCachedAgents(stores.AgentStore),
 			blobs, leaseTTL, logger),
 		reaper: NewReaper(txManager, cfg.Engine, DefaultBackoff, logger,
 			WithReapInterval(time.Duration(cfg.Engine.ReapInterval)*time.Second)),
@@ -107,6 +108,9 @@ func (n *Node) Run(ctx context.Context) error {
 	group.Go(func() error { return n.registrar.Run(loopCtx) })
 	group.Go(func() error { return n.dispatcher.Run(loopCtx) })
 	group.Go(func() error { return n.reaper.Run(loopCtx) })
+	if n.cfg.Retention != nil && n.cfg.Retention.Enabled {
+		group.Go(func() error { return n.retention.Run(loopCtx) })
+	}
 	group.Go(func() error { return n.listener.Run(loopCtx, wake) })
 
 	runErr := group.Wait()

@@ -178,7 +178,7 @@ func TestMetrics_CountsFencedWrites(t *testing.T) {
 			return &runtime.Response{Output: []byte(`{"from":"stalled"}`)}, nil
 		}),
 		engine.NewCommitter(repositories.NewTxManager(f.pool, nopLogger()), nopLogger(), noBackoff),
-		engine.StaticResolver{}, engine.StaticAgentImages("unused"),
+		engine.StaticResolver{}, engine.StaticAgent{Image: "unused"},
 		blob.Disabled{}, testLeaseTTL, nopLogger())
 
 	if err := pool.Handle(ctx, claimed); err != nil {

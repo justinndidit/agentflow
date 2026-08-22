@@ -34,6 +34,7 @@ type TaskStore interface {
 	MarkFailed(context.Context, Fence, string, time.Duration) (*TaskCommit, error)
 	DecrementDependents(context.Context, uuid.UUID, string) ([]uuid.UUID, error)
 	CancelDependents(context.Context, uuid.UUID, string) (int, error)
+	CancelPending(context.Context, uuid.UUID, string) (int, error)
 	RescheduleAfter(context.Context, uuid.UUID, time.Duration) error
 	Notify(context.Context, string, string) error
 	ReclaimExpired(context.Context, time.Duration, time.Duration, int) ([]Reclaimed, error)
