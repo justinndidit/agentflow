@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"math/rand/v2"
 	"time"
 
 	"github.com/justinndidit/agentflow/internal/config"
@@ -91,9 +92,15 @@ func NewReaper(
 }
 
 // Run sweeps until ctx is cancelled.
+//
+// The sweep is jittered rather than run on a fixed tick. A fleet started
+// together — a rolling deploy, a restart after an outage — would otherwise reap
+// in lockstep forever, concentrating every node's scan into the same instant.
+// SKIP LOCKED makes that safe rather than incorrect, but it turns steady
+// background load into a repeating spike, and spreading it costs one line.
 func (r *Reaper) Run(ctx context.Context) error {
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(jitter(r.interval))
+	defer timer.Stop()
 
 	r.logger.Info().
 		Str("func", "Run").
@@ -108,7 +115,7 @@ func (r *Reaper) Run(ctx context.Context) error {
 			r.logger.Info().Str("func", "Run").Msg("reaper stopped")
 			return nil
 
-		case <-ticker.C:
+		case <-timer.C:
 			if _, err := r.ReapOnce(ctx); err != nil {
 				// Logged and retried next tick. A node that cannot reap is not
 				// broken — every other node is running the same loop.
@@ -116,6 +123,7 @@ func (r *Reaper) Run(ctx context.Context) error {
 					Str("func", "Run").
 					Msg("reap failed, retrying next tick")
 			}
+			timer.Reset(jitter(r.interval))
 		}
 	}
 }
@@ -202,9 +210,8 @@ func (r *Reaper) finishPermanently(
 		return err
 	}
 
-	err = stores.WorkflowStore.RecordTaskOutcome(
-		ctx, task.WorkflowID, state.FailedTaskStatus, cancelled, 0)
-	if err != nil {
+	if _, err := stores.WorkflowStore.RecordTaskOutcome(
+		ctx, task.WorkflowID, state.FailedTaskStatus, cancelled, 0); err != nil {
 		return err
 	}
 
@@ -218,4 +225,18 @@ func (r *Reaper) finishPermanently(
 		Msg("reclaimed task had no retries left; failed permanently")
 
 	return nil
+}
+
+// jitter spreads a periodic sweep across the second half of its interval, so
+// nodes that started together drift apart instead of staying synchronised.
+//
+// Downward only, from half the interval to the whole of it: sweeping early is
+// harmless, while sweeping late lets abandoned work sit longer than the
+// configured period promises.
+func jitter(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return DefaultReapInterval
+	}
+	half := interval / 2
+	return half + time.Duration(rand.Int64N(int64(half)+1))
 }

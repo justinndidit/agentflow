@@ -12,16 +12,18 @@ import (
 
 // Instruments are the engine's metrics.
 type Instruments struct {
-	claimed   metric.Int64Counter
-	completed metric.Int64Counter
-	failed    metric.Int64Counter
-	cancelled metric.Int64Counter
-	reclaimed metric.Int64Counter
-	fenced    metric.Int64Counter
-	duration  metric.Float64Histogram
-	tokens    metric.Int64Counter
-	cost      metric.Int64Counter
-	inflight  metric.Int64UpDownCounter
+	claimed    metric.Int64Counter
+	completed  metric.Int64Counter
+	failed     metric.Int64Counter
+	cancelled  metric.Int64Counter
+	reclaimed  metric.Int64Counter
+	fenced     metric.Int64Counter
+	duration   metric.Float64Histogram
+	tokens     metric.Int64Counter
+	cost       metric.Int64Counter
+	inflight   metric.Int64UpDownCounter
+	expired    metric.Int64Counter
+	overBudget metric.Int64Counter
 }
 
 // meters holds the instruments the whole engine records through.
@@ -71,6 +73,10 @@ func NewInstruments() *Instruments {
 		tokens:   counter(meter, "agentflow.tokens.used", "Model tokens reported by workers"),
 		cost:     counter(meter, "agentflow.cost.micros", "Cost in micros reported by workers"),
 		inflight: upDownCounter(meter, "agentflow.pool.inflight", "Tasks currently running on this node"),
+		expired:  counter(meter, "agentflow.workflows.expired", "Finished workflows deleted by retention"),
+		// Real money: a workflow that crossed its ceiling has already spent
+		// past what its author declared.
+		overBudget: counter(meter, "agentflow.workflows.over_budget", "Workflows stopped for exceeding their token budget"),
 	}
 }
 
@@ -172,4 +178,14 @@ func (i *Instruments) record(ctx context.Context, h metric.Float64Histogram, val
 		return
 	}
 	h.Record(ctx, value, metric.WithAttributes(attrs...))
+}
+
+// WorkflowsExpired records workflows removed by retention.
+func (i *Instruments) WorkflowsExpired(ctx context.Context, count int) {
+	i.add(ctx, i.expired, int64(count))
+}
+
+// BudgetExceeded records a workflow stopped for spending past its ceiling.
+func (i *Instruments) BudgetExceeded(ctx context.Context) {
+	i.add(ctx, i.overBudget, 1)
 }

@@ -172,6 +172,19 @@ go run ./cmd/agentflow engine -seed     # first run
 go run ./cmd/agentflow engine           # afterwards
 ```
 
+Agents are registered in a table a manifest refers to by name, so a workflow
+cannot be submitted until the agents it names exist. `-seed` inserts
+placeholders for the example manifest; to point one at a real image:
+
+```bash
+go run ./cmd/agentflow agent register \
+  -name research-agent -image agentflow/echo-agent:latest
+go run ./cmd/agentflow agent list
+```
+
+Registering an existing name re-points it rather than duplicating it, and one
+image can serve several agents by giving each its own `-command`.
+
 Then submit:
 
 ```bash
@@ -202,22 +215,27 @@ gives you two independent graphs — hence the scoping by workflow above.
 
 ```bash
 task test              # unit tests, no Docker needed
-task test:integration  # against a throwaway Postgres, needs Docker
+task test:integration  # against throwaway Postgres and MinIO, needs Docker
 task test:all
+task check             # what CI runs: format, vet both tags, both suites
 ```
 
 The suite is split by build tag. Unit tests cover the pure logic — manifest
 validation, cycle detection, the state machine, backoff — and run in about a
-second. Integration tests are tagged `integration` and start a real Postgres per
-package via testcontainers, because most of what the repository layer does is a
-Postgres semantic rather than a Go one: positional `COPY`, `INTERVAL` encoding,
-foreign keys, enum casts, `SKIP LOCKED`. Faking the database there would only
-assert that the code calls the methods it was written to call.
+second. Integration tests are tagged `integration` and start real dependencies
+via testcontainers, because most of what this engine does is a Postgres, Docker
+or S3 semantic rather than a Go one: positional `COPY`, `INTERVAL` encoding,
+foreign keys, `SKIP LOCKED`, container sandboxing, presigned uploads. Faking
+them would only assert that the code calls the methods it was written to call.
+
+Both suites run in CI on every push and pull request, along with a `gofmt` gate
+and `go vet` over both build configurations — a plain vet cannot see the
+integration files at all.
 
 ## Project Layout
 
 ```
-cmd/agentflow/         submit and engine commands
+cmd/agentflow/         submit, engine and agent commands
 internal/
   manifest/            YAML schema, parsing, template validation
   engine/              submit pipeline, and the five node loops:
@@ -251,4 +269,4 @@ pkg/                   logger, set, json helpers
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

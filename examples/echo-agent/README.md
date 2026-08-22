@@ -8,10 +8,8 @@ model provider.
 docker build -t agentflow/echo-agent:latest examples/echo-agent
 
 # Register it under whatever name your manifest uses.
-docker exec agentflow_db psql -U postgres -d agentflow -c \
-  "INSERT INTO agents (id, name, agent_image)
-   VALUES (gen_random_uuid(), 'research-agent', 'agentflow/echo-agent:latest')
-   ON CONFLICT (name) DO UPDATE SET agent_image = EXCLUDED.agent_image"
+go run ./cmd/agentflow agent register \
+  -name research-agent -image agentflow/echo-agent:latest
 
 AGENTFLOW__ENGINE__RUNTIME=docker go run ./cmd/agentflow engine
 ```
