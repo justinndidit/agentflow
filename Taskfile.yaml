@@ -51,10 +51,23 @@ tasks:
     cmds:
       - gofmt -l -w .
 
+  fmt:check:
+    desc: Fail if anything is not formatted — the gate, as opposed to the fix
+    cmds:
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "These files are not gofmt'd:"
+          echo "$unformatted"
+          exit 1
+        fi
+
   check:
     desc: What CI runs
     cmds:
-      - task: fmt
+      # The gate rather than the fix: CI must fail on unformatted code, not
+      # quietly rewrite it and pass.
+      - task: fmt:check
       - task: lint
       - task: test:all
 

@@ -215,17 +215,22 @@ gives you two independent graphs — hence the scoping by workflow above.
 
 ```bash
 task test              # unit tests, no Docker needed
-task test:integration  # against a throwaway Postgres, needs Docker
+task test:integration  # against throwaway Postgres and MinIO, needs Docker
 task test:all
+task check             # what CI runs: format, vet both tags, both suites
 ```
 
 The suite is split by build tag. Unit tests cover the pure logic — manifest
 validation, cycle detection, the state machine, backoff — and run in about a
-second. Integration tests are tagged `integration` and start a real Postgres per
-package via testcontainers, because most of what the repository layer does is a
-Postgres semantic rather than a Go one: positional `COPY`, `INTERVAL` encoding,
-foreign keys, enum casts, `SKIP LOCKED`. Faking the database there would only
-assert that the code calls the methods it was written to call.
+second. Integration tests are tagged `integration` and start real dependencies
+via testcontainers, because most of what this engine does is a Postgres, Docker
+or S3 semantic rather than a Go one: positional `COPY`, `INTERVAL` encoding,
+foreign keys, `SKIP LOCKED`, container sandboxing, presigned uploads. Faking
+them would only assert that the code calls the methods it was written to call.
+
+Both suites run in CI on every push and pull request, along with a `gofmt` gate
+and `go vet` over both build configurations — a plain vet cannot see the
+integration files at all.
 
 ## Project Layout
 
@@ -264,4 +269,4 @@ pkg/                   logger, set, json helpers
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

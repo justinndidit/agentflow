@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A newer push supersedes an in-flight run on the same branch. The integration
+# job starts real containers, so leaving stale runs going is both slow and a
+# waste of a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast feedback: formatting, vet and the unit suite. Nothing here needs
+  # Docker, so it finishes in under a minute and catches most mistakes before
+  # the slow job has finished pulling images.
+  check:
+    name: Format, vet and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Read from go.mod so the CI toolchain cannot drift from what the
+          # module declares.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # Both build configurations. A plain vet cannot see the integration files
+      # at all, so a broken test there would otherwise reach main unnoticed.
+      - name: Vet
+        run: |
+          go vet ./...
+          go vet -tags integration ./...
+
+      - name: Unit tests
+        run: go test -race ./...
+
+  # The suite that matters. Almost everything load-bearing in this codebase is
+  # a Postgres, Docker or S3 semantic, so these run against real ones via
+  # testcontainers rather than against fakes that would only assert the code
+  # calls the methods it was written to call.
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    # Generous: a cold runner pulls Postgres, MinIO and alpine, builds the
+    # reference agent image, and the two-node kill test waits out real lease
+    # expiry.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Pulled up front so an image pull is not counted against the first
+      # test's own timeout, which is how a cold cache turns into a flake.
+      - name: Pre-pull test images
+        run: |
+          docker pull postgres:16-alpine
+          docker pull minio/minio:latest
+          docker pull alpine:latest
+          # The reference agent in examples/echo-agent builds from this, and
+          # that build runs inside a test.
+          docker pull alpine:3.20
+
+      - name: Integration tests
+        run: go test -race -tags integration -timeout 25m ./...
